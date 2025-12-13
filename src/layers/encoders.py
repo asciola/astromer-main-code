@@ -20,6 +20,8 @@ class Encoder(tf.keras.Model):
                  mask_format='Q',
                  use_leak=False,
                  temperature=0.,
+                 use_cache=False,
+                 latent_dim=None,
                  **kwargs):
         super().__init__(**kwargs)
         # super().__init__(**kwargs)
@@ -37,9 +39,13 @@ class Encoder(tf.keras.Model):
         self.m_alpha        = m_alpha
         self.use_leak       = use_leak
         self.temp           = temperature
+        self.use_cache      = use_cache
+        self.latent_dim = latent_dim
+        self.kv_caches      = [None]*num_layers
         self.inp_transform  = tf.keras.layers.Dense(self.pe_dim, name='inp_transform')
         
-        
+        print("Use_cache:", self.use_cache)
+        print("latent_dim:", self.latent_dim)
         self.enc_layers = [AttentionBlock(self.head_dim, 
                                           self.num_heads, 
                                           self.mixer_size, 
@@ -48,6 +54,8 @@ class Encoder(tf.keras.Model):
                                           m_alpha=self.m_alpha,
                                           use_leak=self.use_leak,
                                           temperature=self.temp,
+                                          use_cache=self.use_cache,
+                                          latent_dim=self.latent_dim,
                                           name=f'att_layer_{i}')
                             for i in range(self.num_layers)]
 
@@ -63,7 +71,7 @@ class Encoder(tf.keras.Model):
 
         x_transformed = self.inp_transform(x)           
         x_pe = self.pe(inputs['times'], 
-                       self.pe_dim, 
+                       d_model=self.pe_dim, 
                        base=self.pe_base, 
                        mjd=True, 
                        c=self.pe_c)
@@ -85,12 +93,12 @@ class Encoder(tf.keras.Model):
         output_by_layer = []
         for i in range(self.num_layers):
             if return_weights:
-                x, w, qkvalues, qkv =  self.enc_layers[i](x, training=training, 
+                x, w, qkvalues, qkv, new_cache =  self.enc_layers[i](x, training=training, kv_cache=self.kv_caches[i],
                                                      mask=inputs['mask_in'], 
                                                      return_weights=True)
             else:
-                x =  self.enc_layers[i](x, training=training, mask=inputs['mask_in'])
-                
+                x, new_cache =  self.enc_layers[i](x, training=training, kv_cache=self.kv_caches[i], mask=inputs['mask_in'])
+            self.kv_caches[i] = new_cache
             x = self.output_transform(x)
             output_by_layer.append(x)
 

@@ -47,7 +47,9 @@ def get_ASTROMER(num_layers=2,
                  loss_format='rmse',
                  correct_loss=False,
                  trainable_mask=True,
-                 temperature=0.):
+                 temperature=0.,
+                 use_cache=False,
+                 latent_dim=None):
     
     print('[INFO] Temperature: {:.2f}'.format(temperature))
     print('[INFO] Mask format: {}'.format(mask_format))
@@ -73,6 +75,8 @@ def get_ASTROMER(num_layers=2,
                       mask_format=mask_format,
                       use_leak=use_leak,
                       temperature=temperature,
+                      use_cache=use_cache,
+                      latent_dim=latent_dim,
                       name='encoder')
 
     x = encoder(placeholder)

@@ -55,7 +55,10 @@ def build_model(params, return_weights=False):
                          loss_format=params['loss_format'],
                          correct_loss=params['correct_loss'],
                          trainable_mask=not params['no_msk_token'],
-                         temperature=params['temperature'])
+                         temperature=params['temperature'],
+                         use_cache=params['use_kv_cache'],
+                         latent_dim=params['latent_dim']
+                         )
 
     return model
 

@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from src.layers.attention import HeadAttentionMulti
+from src.layers.attention import HeadAttentionMulti, HeadAttentionMultiCached, SimpleHeadAttentionMultiLatent
 
 
 def point_wise_feed_forward_network(d_model, dff):
@@ -12,7 +12,7 @@ def point_wise_feed_forward_network(d_model, dff):
 class AttentionBlock(tf.keras.layers.Layer):
     def __init__(self, head_dim, num_heads, mixer_size, 
                  dropout=0.1, m_alpha=-0.5, mask_format='Q', 
-                 use_leak=False, temperature=0., **kwargs):
+                 use_leak=False, temperature=0., use_cache=False, latent_dim=None, **kwargs):
         super(AttentionBlock, self).__init__(**kwargs)
         self.head_dim = head_dim
         self.num_heads = num_heads
@@ -22,7 +22,15 @@ class AttentionBlock(tf.keras.layers.Layer):
         self.m_alpha = m_alpha
         self.use_leak = use_leak
         self.temp = temperature
-        self.mha = HeadAttentionMulti(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
+        self.use_cache = use_cache
+        self.latent_dim = latent_dim
+        if use_cache:
+            if latent_dim is not None:
+                self.mha = SimpleHeadAttentionMultiLatent(self.head_dim, self.num_heads, self.latent_dim, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
+            else:
+                self.mha = HeadAttentionMultiCached(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
+        else:
+            self.mha = HeadAttentionMulti(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
         self.ffn = point_wise_feed_forward_network(self.num_heads*self.head_dim, 
                                                    self.mixer_size)
 
@@ -36,8 +44,12 @@ class AttentionBlock(tf.keras.layers.Layer):
         self.dropout1 = tf.keras.layers.Dropout(self.dropout)
         self.dropout2 = tf.keras.layers.Dropout(self.dropout)
 
-    def call(self, x, training, mask=None, return_weights=False):
-        attn_output, att_weights, qk_values, (q,k,v) = self.mha(x, training=training, mask=mask)  # (batch_size, input_seq_len, d_model)
+    def call(self, x, training, mask=None, kv_cache=None, return_weights=False):
+        if self.use_cache:
+            attn_output, att_weights, qk_values, (q,k,v), new_cache = self.mha(x, training=training, previous_kv=kv_cache, mask=mask)  # (batch_size, input_seq_len, d_model)
+        else:
+            attn_output, att_weights, qk_values, (q,k,v) = self.mha(x, training=training, mask=mask)  # (batch_size, input_seq_len, d_model)
+            new_cache = None
         attn_output = self.dropout1(attn_output, training=training)
 
         if self.use_leak:
@@ -54,9 +66,9 @@ class AttentionBlock(tf.keras.layers.Layer):
         ffn_output  = self.layernorm2(ffn_output, training=training)
 
         if return_weights:
-            return ffn_output, att_weights, qk_values, (q,k,v)
+            return ffn_output, att_weights, qk_values, (q,k,v), new_cache
 
-        return ffn_output
+        return ffn_output, new_cache
 
     def get_config(self):
         config = super().get_config()
@@ -68,6 +80,8 @@ class AttentionBlock(tf.keras.layers.Layer):
             "mask_format": self.mask_format,
             "m_alpha": self.m_alpha,
             "use_leak": self.use_leak,
+            "use_cache": self.use_cache,
+            "latent_dim": self.latent_dim,
             "mha": serialize_keras_object(self.mha),
             "ffn": serialize_keras_object(self.ffn),
         })

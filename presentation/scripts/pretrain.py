@@ -145,6 +145,10 @@ if __name__ == '__main__':
                         help='Use Custom Scheduler during training')  
     parser.add_argument('--temperature', default=0., type=float,
                         help='Temperature used within the softmax argument')
+    parser.add_argument('--use-kv-cache', action='store_true',
+                        help='Use KV caching for performance')
+    parser.add_argument('--latent-dim', type=int,
+                        help="Number of latent dimensions for Multi-head Latent Attention (requires --use-kv-cache). Recommend 1/4 - 1/8 of num-heads * head-dim")
 
 
 
