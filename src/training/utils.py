@@ -8,6 +8,9 @@ import toml
 import os
 from tqdm import tqdm
 
+import psutil
+import pynvml
+
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
 from datetime import datetime
@@ -78,7 +81,28 @@ def distributed_test_step(model, batch, strategy):
     return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
                             axis=None)
 
+# Initialize NVML for GPU monitoring
+pynvml.nvmlInit()
+gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
 
+def log_system_metrics(writer, step, epoch=None, batch=None):
+    """Logs CPU, RAM, GPU memory, and GPU utilization to TensorBoard."""
+    cpu_percent = psutil.cpu_percent()
+    ram = psutil.virtual_memory()
+    
+    mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
+    util = pynvml.nvmlDeviceGetUtilizationRates(gpu_handle)
+    
+    with writer.as_default():
+        tf.summary.scalar('CPU_percent', cpu_percent, step=step)
+        tf.summary.scalar('RAM_used_GB', ram.used / 1e9, step=step)
+        tf.summary.scalar('GPU_mem_used_GB', mem_info.used / 1e9, step=step)
+        tf.summary.scalar('GPU_util_percent', util.gpu, step=step)
+        if epoch is not None:
+            tf.summary.scalar('epoch', epoch, step=step)
+        if batch is not None:
+            tf.summary.scalar('batch', batch, step=step)
+    
 def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_patience=20, test_data=None, project_folder=''):
     train_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'train'))
     valid_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'validation'))
@@ -90,6 +114,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
     # ========= Training Loop ==================================
     es_count = 0
     min_loss = 1e9
+    step = 0
+    
     for epoch in pbar:
         pbar.set_postfix(item1=epoch)
         epoch_tr_rmse    = []
@@ -105,6 +131,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             epoch_tr_rmse.append(metrics['rmse'])
             epoch_tr_rsquare.append(metrics['rsquare'])
             epoch_tr_loss.append(metrics['loss'])
+            log_system_metrics(train_writer, step, epoch=epoch, batch=numbatch)
+            step += 1
 
         for batch in validation_data:
             metrics = test_step(model, batch)
