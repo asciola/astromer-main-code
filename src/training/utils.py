@@ -57,7 +57,7 @@ def train_step(model, inputs, optimizer):
 def test_step(model, inputs):
     x, y = inputs
 
-    y_pred = model(x, training=tf.constant(False))
+    y_pred = model(x, training=False)
     rmse = custom_rmse(y_true=y['target'],
                        y_pred=y_pred,
                        mask=y['mask_out'],
@@ -82,22 +82,36 @@ def distributed_test_step(model, batch, strategy):
                             axis=None)
 
 # Initialize NVML for GPU monitoring
-pynvml.nvmlInit()
-gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
+try:
+    pynvml.nvmlInit()
+    NVML_AVAILABLE = True
+except:
+    NVML_AVAILABLE = False
+
+if NVML_AVAILABLE:
+    gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
+else:
+    gpu_handle = None
 
 def log_system_metrics(writer, step, epoch=None, batch=None):
     """Logs CPU, RAM, GPU memory, and GPU utilization to TensorBoard."""
     cpu_percent = psutil.cpu_percent()
     ram = psutil.virtual_memory()
     
-    mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
-    util = pynvml.nvmlDeviceGetUtilizationRates(gpu_handle)
-    
+    if gpu_handle is not None:
+        mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
+        util = pynvml.nvmlDeviceGetUtilizationRates(gpu_handle)
+    else:
+        mem_info = None
+        util = None
+
     with writer.as_default():
         tf.summary.scalar('CPU_percent', cpu_percent, step=step)
         tf.summary.scalar('RAM_used_GB', ram.used / 1e9, step=step)
-        tf.summary.scalar('GPU_mem_used_GB', mem_info.used / 1e9, step=step)
-        tf.summary.scalar('GPU_util_percent', util.gpu, step=step)
+        if mem_info is not None:
+            tf.summary.scalar('GPU_mem_used_GB', mem_info.used / 1e9, step=step)
+        if util is not None:
+            tf.summary.scalar('GPU_util_percent', util.gpu, step=step)
         if epoch is not None:
             tf.summary.scalar('epoch', epoch, step=step)
         if batch is not None:
@@ -133,6 +147,11 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             epoch_tr_loss.append(metrics['loss'])
             log_system_metrics(train_writer, step, epoch=epoch, batch=numbatch)
             step += 1
+
+        # Clear caches before test_steps
+        if hasattr(model, 'encoder') and hasattr(model.encoder, 'kv_caches'):
+            num_layers = len(model.encoder.kv_caches)
+            model.encoder.kv_caches = [None] * num_layers
 
         for batch in validation_data:
             metrics = test_step(model, batch)
