@@ -40,12 +40,14 @@ class Encoder(tf.keras.Model):
         self.use_leak       = use_leak
         self.temp           = temperature
         self.use_cache      = use_cache
-        self.latent_dim = latent_dim
+        self.latent_dim     = latent_dim
+
+        if self.use_cache and self.latent_dim is None:
+            raise ValueError("latent_dim must be provided when use_cache=True")
+
         self.kv_caches      = [None]*num_layers
         self.inp_transform  = tf.keras.layers.Dense(self.pe_dim, name='inp_transform')
         
-        print("Use_cache:", self.use_cache)
-        print("latent_dim:", self.latent_dim)
         self.enc_layers = [AttentionBlock(self.head_dim, 
                                           self.num_heads, 
                                           self.mixer_size, 
@@ -86,19 +88,37 @@ class Encoder(tf.keras.Model):
     def output_transform(self, inputs):
         return inputs
 
+    def reset_caches(self):
+        self.kv_caches = [None] * self.num_layers
+
     def call(self, inputs, training=False, return_weights=False, z_by_layer=False):
         # adding embedding and position encoding.
         x, window_size = self.input_format(inputs)  
         x = self.dropout_layer(x, training=training)
+        
+        # Use a local copy to avoid leaking tensors into self.kv_caches during tracing
+        current_caches = list(self.kv_caches)
         output_by_layer = []
+        
         for i in range(self.num_layers):
             if return_weights:
-                x, w, qkvalues, qkv, new_cache =  self.enc_layers[i](x, training=training, kv_cache=self.kv_caches[i],
-                                                     mask=inputs['mask_in'], 
-                                                     return_weights=True)
+                x, w, qkvalues, qkv, nc = self.enc_layers[i](
+                    x, training=training, kv_cache=current_caches[i],
+                    mask=inputs['mask_in'], 
+                    return_weights=True)
             else:
-                x, new_cache =  self.enc_layers[i](x, training=training, kv_cache=self.kv_caches[i], mask=inputs['mask_in'])
-            self.kv_caches[i] = new_cache
+                x, nc = self.enc_layers[i](
+                    x, training=training, kv_cache=current_caches[i], 
+                    mask=inputs['mask_in'])
+            
+            # Update local list for depth-wise caching
+            current_caches[i] = nc
+            
+            # Optionally update persistent state if in eager mode
+            # This avoids "out of scope" errors during Graph tracing
+            if tf.executing_eagerly():
+                self.kv_caches[i] = nc
+
             x = self.output_transform(x)
             output_by_layer.append(x)
 
@@ -119,7 +139,7 @@ class SkipEncoder(Encoder):
                                      size=self.num_layers, 
                                      name='skip_att')
         for i in range(self.num_layers):
-            x =  self.enc_layers[i](x, training=training, mask=inputs['mask_in'])
+            x, _ =  self.enc_layers[i](x, training=training, mask=inputs['mask_in'])
             att_outputs = att_outputs.write(i, x)
         out = tf.reduce_mean(att_outputs.stack(), axis=0)
         return out  # (batch_size, input_seq_len, d_model)

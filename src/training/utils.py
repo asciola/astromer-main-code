@@ -149,9 +149,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             step += 1
 
         # Clear caches before test_steps
-        if hasattr(model, 'encoder') and hasattr(model.encoder, 'kv_caches'):
-            num_layers = len(model.encoder.kv_caches)
-            model.encoder.kv_caches = [None] * num_layers
+        if hasattr(model, 'encoder'):
+            model.encoder.reset_caches()
 
         for batch in validation_data:
             metrics = test_step(model, batch)
@@ -178,7 +177,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         if tf.math.greater(min_loss, vl_rmse):
             min_loss = vl_rmse
             es_count = 0
-            model.save_weights(os.path.join(project_folder, 'weights'))
+            model.save_weights(os.path.join(project_folder, 'out.weights.h5'))
         else:
             es_count = es_count + 1
 

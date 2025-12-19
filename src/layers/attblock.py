@@ -1,6 +1,7 @@
 import tensorflow as tf
+from tensorflow.keras.utils import serialize_keras_object, deserialize_keras_object
 
-from src.layers.attention import HeadAttentionMulti, HeadAttentionMultiCached, SimpleHeadAttentionMultiLatent
+from src.layers.attention import HeadAttentionMulti, SimpleHeadAttentionMultiLatent
 
 
 def point_wise_feed_forward_network(d_model, dff):
@@ -27,8 +28,6 @@ class AttentionBlock(tf.keras.layers.Layer):
         if use_cache:
             if latent_dim is not None:
                 self.mha = SimpleHeadAttentionMultiLatent(self.head_dim, self.num_heads, self.latent_dim, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
-            else:
-                self.mha = HeadAttentionMultiCached(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
         else:
             self.mha = HeadAttentionMulti(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
         self.ffn = point_wise_feed_forward_network(self.num_heads*self.head_dim, 
@@ -44,31 +43,98 @@ class AttentionBlock(tf.keras.layers.Layer):
         self.dropout1 = tf.keras.layers.Dropout(self.dropout)
         self.dropout2 = tf.keras.layers.Dropout(self.dropout)
 
-    def call(self, x, training, mask=None, kv_cache=None, return_weights=False):
-        if self.use_cache:
-            attn_output, att_weights, qk_values, (q,k,v), new_cache = self.mha(x, training=training, previous_kv=kv_cache, mask=mask)  # (batch_size, input_seq_len, d_model)
+    def call(self, x, training=None, mask=None, kv_cache=None, return_weights=False):
+        if training is None:
+            training = tf.keras.backend.learning_phase()
+
+        batch_size = tf.shape(x)[0]
+        seq_len = tf.shape(x)[1]
+        
+        # Determine training status as a tensor
+        is_training = tf.cast(training, tf.bool)
+        can_use_cache = tf.cast(self.use_cache, tf.bool)
+
+        # Normalize kv_cache to a Tensor to avoid Graph/Literal mismatch issues
+        if kv_cache is None:
+             l_dim = self.latent_dim if self.latent_dim else 1
+             kvc = tf.zeros((batch_size, 0, l_dim))
         else:
-            attn_output, att_weights, qk_values, (q,k,v) = self.mha(x, training=training, mask=mask)  # (batch_size, input_seq_len, d_model)
-            new_cache = None
-        attn_output = self.dropout1(attn_output, training=training)
+             kvc = kv_cache
+
+        # Decision variables as Tensors
+        has_cache_tensor = tf.greater(tf.shape(kvc)[1], 0)
+        
+        # Recurrent mode condition
+        # We use recurrent mode ONLY if caching is enabled AND not training AND (seq_len == 1 OR we have a cache)
+        use_recurrent = tf.logical_and(
+            tf.logical_and(can_use_cache, tf.logical_not(is_training)),
+            tf.logical_or(tf.equal(seq_len, 1), has_cache_tensor)
+        )
+
+        def recurrent_path():
+            x_q = x[:, -1:, :]
+            m_q = mask[:, -1:, :] if mask is not None else None
+            
+            def first_step():
+                # No cache yet: initial attention call
+                m_step = m_q[:, :, :1] if m_q is not None else None
+                out, w, qk, qkv_tuple = self.mha(x_q, mask=m_step, training=False)
+                nc = self.mha.compute_latent_kv(x_q)
+                return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
+
+            def update_step():
+                # Use provided cache
+                out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q, kvc, m_q)
+                new_kv = self.mha.compute_latent_kv(x_q)
+                nc = tf.concat([kvc, new_kv], axis=1)
+                return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
+
+            return tf.cond(has_cache_tensor, update_step, first_step)
+
+        def full_sequence_path():
+            # Process full sequence (Training or Validation/Inference batch)
+            out, w, qk, qkv_tuple = self.mha(x, mask=mask, training=training)
+            
+            # Prefill cache if and only if use_cache=True AND training=False (validation/batch inference)
+            def compute_prefill():
+                return self.mha.compute_latent_kv(x)
+            
+            def compute_empty():
+                l_dim = self.latent_dim if self.latent_dim else 1
+                return tf.zeros((batch_size, 0, l_dim))
+                
+            nc = tf.cond(tf.logical_and(can_use_cache, tf.logical_not(is_training)),
+                         compute_prefill, compute_empty)
+            return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
+
+        # Execute branches. Flatten outputs to avoid nested structure issues in Graph mode.
+        attn_out, att_w, qk_v, q_t, k_t, v_t, n_cache = tf.cond(
+            use_recurrent, recurrent_path, full_sequence_path)
+
+        # Residuals and Post-processing
+        attn_out = self.dropout1(attn_out, training=training)
 
         if self.use_leak:
-            attn_output = self.reshape_leak_1(x) + attn_output
+            leak_x = tf.cond(use_recurrent, lambda: x[:, -1:, :], lambda: x)
+            attn_out = self.reshape_leak_1(leak_x) + attn_out
 
-        attn_output = self.layernorm1(attn_output, training=training)
-
-        ffn_output  = self.ffn(attn_output)  # (batch_size, input_seq_len, d_model)
-        ffn_output  = self.dropout2(ffn_output, training=training)
+        attn_out = self.layernorm1(attn_out, training=training)
+        ffn_out  = self.ffn(attn_out)
+        ffn_out  = self.dropout2(ffn_out, training=training)
 
         if self.use_leak:
-            ffn_output = self.reshape_leak_2(attn_output) + ffn_output
+            ffn_out = self.reshape_leak_2(attn_out) + ffn_out
 
-        ffn_output  = self.layernorm2(ffn_output, training=training)
+        ffn_out = self.layernorm2(ffn_out, training=training)
+        
+        # Convert empty tensor cache back to None ONLY if self.use_cache is False globally
+        # Otherwise, return the tensor to satisfy Graph mode requirements
+        final_cache_val = n_cache if self.use_cache else None
 
         if return_weights:
-            return ffn_output, att_weights, qk_values, (q,k,v), new_cache
+            return ffn_out, att_w, qk_v, (q_t, k_t, v_t), final_cache_val
 
-        return ffn_output, new_cache
+        return ffn_out, final_cache_val
 
     def get_config(self):
         config = super().get_config()
@@ -82,15 +148,11 @@ class AttentionBlock(tf.keras.layers.Layer):
             "use_leak": self.use_leak,
             "use_cache": self.use_cache,
             "latent_dim": self.latent_dim,
-            "mha": serialize_keras_object(self.mha),
-            "ffn": serialize_keras_object(self.ffn),
+            "temperature": self.temp
         })
         return config
 
     @classmethod
     def from_config(cls, config):
-        mha_config = config.pop("mha")
-        ffn_config = config.pop("ffn")
-        mha_config = deserialize_keras_object(mha_config)
-        ffn_config = deserialize_keras_object(ffn_config)
-        return cls(mha_config, ffn_config, **config)
+        # Reconstruct the block from its parameters
+        return cls(**config)
