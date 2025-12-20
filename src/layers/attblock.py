@@ -47,6 +47,26 @@ class AttentionBlock(tf.keras.layers.Layer):
         if training is None:
             training = tf.keras.backend.learning_phase()
 
+        if not self.use_cache:
+            # Simple path for when caching is disabled (ignores kv_cache)
+            attn_output, att_w, qk_v, (q_t, k_t, v_t) = self.mha(x, training=training, mask=mask)
+            
+            attn_output = self.dropout1(attn_output, training=training)
+            if self.use_leak:
+                attn_output = self.reshape_leak_1(x) + attn_output
+            attn_output = self.layernorm1(attn_output, training=training)
+
+            ffn_output  = self.ffn(attn_output)
+            ffn_output  = self.dropout2(ffn_output, training=training)
+            if self.use_leak:
+                ffn_output = self.reshape_leak_2(attn_output) + ffn_output
+            ffn_output = self.layernorm2(ffn_output, training=training)
+
+            if return_weights:
+                return ffn_output, att_w, qk_v, (q_t, k_t, v_t), None
+            return ffn_output, None
+
+        # Caching path (only traced if use_cache is True)
         batch_size = tf.shape(x)[0]
         seq_len = tf.shape(x)[1]
         
@@ -65,7 +85,6 @@ class AttentionBlock(tf.keras.layers.Layer):
         has_cache_tensor = tf.greater(tf.shape(kvc)[1], 0)
         
         # Recurrent mode condition
-        # We use recurrent mode ONLY if caching is enabled AND not training AND (seq_len == 1 OR we have a cache)
         use_recurrent = tf.logical_and(
             tf.logical_and(can_use_cache, tf.logical_not(is_training)),
             tf.logical_or(tf.equal(seq_len, 1), has_cache_tensor)
@@ -76,14 +95,12 @@ class AttentionBlock(tf.keras.layers.Layer):
             m_q = mask[:, -1:, :] if mask is not None else None
             
             def first_step():
-                # No cache yet: initial attention call
                 m_step = m_q[:, :, :1] if m_q is not None else None
                 out, w, qk, qkv_tuple = self.mha(x_q, mask=m_step, training=False)
                 nc = self.mha.compute_latent_kv(x_q)
                 return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
 
             def update_step():
-                # Use provided cache
                 out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q, kvc, m_q)
                 new_kv = self.mha.compute_latent_kv(x_q)
                 nc = tf.concat([kvc, new_kv], axis=1)
@@ -92,10 +109,8 @@ class AttentionBlock(tf.keras.layers.Layer):
             return tf.cond(has_cache_tensor, update_step, first_step)
 
         def full_sequence_path():
-            # Process full sequence (Training or Validation/Inference batch)
             out, w, qk, qkv_tuple = self.mha(x, mask=mask, training=training)
             
-            # Prefill cache if and only if use_cache=True AND training=False (validation/batch inference)
             def compute_prefill():
                 return self.mha.compute_latent_kv(x)
             
@@ -107,7 +122,7 @@ class AttentionBlock(tf.keras.layers.Layer):
                          compute_prefill, compute_empty)
             return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
 
-        # Execute branches. Flatten outputs to avoid nested structure issues in Graph mode.
+        # Execute branches
         attn_out, att_w, qk_v, q_t, k_t, v_t, n_cache = tf.cond(
             use_recurrent, recurrent_path, full_sequence_path)
 
@@ -127,8 +142,6 @@ class AttentionBlock(tf.keras.layers.Layer):
 
         ffn_out = self.layernorm2(ffn_out, training=training)
         
-        # Convert empty tensor cache back to None ONLY if self.use_cache is False globally
-        # Otherwise, return the tensor to satisfy Graph mode requirements
         final_cache_val = n_cache if self.use_cache else None
 
         if return_weights:
