@@ -9,7 +9,6 @@ import os
 from tqdm import tqdm
 
 import psutil
-import pynvml
 
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
@@ -82,36 +81,15 @@ def distributed_test_step(model, batch, strategy):
                             axis=None)
 
 # Initialize NVML for GPU monitoring
-try:
-    pynvml.nvmlInit()
-    NVML_AVAILABLE = True
-except:
-    NVML_AVAILABLE = False
-
-if NVML_AVAILABLE:
-    gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
-else:
-    gpu_handle = None
 
 def log_system_metrics(writer, step, epoch=None, batch=None):
     """Logs CPU, RAM, GPU memory, and GPU utilization to TensorBoard."""
     cpu_percent = psutil.cpu_percent()
     ram = psutil.virtual_memory()
-    
-    if gpu_handle is not None:
-        mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
-        util = pynvml.nvmlDeviceGetUtilizationRates(gpu_handle)
-    else:
-        mem_info = None
-        util = None
 
     with writer.as_default():
         tf.summary.scalar('CPU_percent', cpu_percent, step=step)
         tf.summary.scalar('RAM_used_GB', ram.used / 1e9, step=step)
-        if mem_info is not None:
-            tf.summary.scalar('GPU_mem_used_GB', mem_info.used / 1e9, step=step)
-        if util is not None:
-            tf.summary.scalar('GPU_util_percent', util.gpu, step=step)
         if epoch is not None:
             tf.summary.scalar('epoch', epoch, step=step)
         if batch is not None:
