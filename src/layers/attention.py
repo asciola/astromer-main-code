@@ -162,12 +162,10 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
                  **kwargs):
         super().__init__(**kwargs)
 
-        assert latent_dim % num_heads == 0, "latent_dim must be divisible by num_heads"
-
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.latent_dim = latent_dim
-        self.latent_head_dim = latent_dim // num_heads
+        # No longer splitting latent_dim per head
 
         self.d_model = num_heads * head_dim
         self.depth = head_dim
@@ -178,12 +176,17 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
 
         # Projections
         self.wq = tf.keras.layers.Dense(self.d_model, name="WQ")
+        # Projects to latent_dim (shared compressed Key)
         self.w_ckv = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_CKV")
-        self.wuk = tf.keras.layers.Dense(self.d_model, use_bias=False, name="WUK")
+        
+        # Projects Query to (num_heads * latent_dim) so each head compares in latent space
+        self.wuk = tf.keras.layers.Dense(self.num_heads * self.latent_dim, use_bias=False, name="WUK")
+        
+        # Reconstructs Value from latent (shared compressed V source)
         self.wuv = tf.keras.layers.Dense(self.d_model, use_bias=False, name="WUV")
 
-        self.wuk.build((None, self.latent_dim))
-        self.wuv.build((None, self.latent_dim))
+        # self.wuk.build((None, self.d_model)) # input to wuk is WQ(x) which is d_model
+        # self.wuv.build((None, self.latent_dim))
 
         self.out_proj = tf.keras.layers.Dense(self.d_model, name="attmerge")
 
@@ -191,14 +194,15 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
         x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
         return tf.transpose(x, [0, 2, 1, 3], name=name)
 
-    def split_heads_latent(self, x, batch_size, name='latent'):
-        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.latent_head_dim))
+    def split_heads_latent_query(self, x, batch_size, name='latent_q'):
+        # x is (B, L, H*latent_dim)
+        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.latent_dim))
         return tf.transpose(x, [0, 2, 1, 3], name=name)
 
     def compute_latent_kv(self, x):
         """
         x: (batch, seq_len, d_model)
-        returns: (batch, seq_len, latent_dim)
+        returns: (batch, seq_len, latent_dim) -> compressed Key/Value source
         """
         return self.w_ckv(x)
 
@@ -210,17 +214,36 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
 
         # ---- Q path ----
         q_full = self.wq(x)                           # (B, L, d_model)
-        q_latent = tf.matmul(q_full, self.wuk.kernel, transpose_b=True)
-        q = self.split_heads_latent(q_latent, batch_size, name='Q_latent')
+        
+        # Project Q to latent space for each head
+        # We map d_model -> num_heads * latent_dim
+        q_latent_all = self.wuk(q_full)               # (B, L, H * latent_dim)
+        q = self.split_heads_latent_query(q_latent_all, batch_size, name='Q_latent') # (B, H, L, latent_dim)
 
         # ---- K/V path (latent compressed) ----
-        k_latent_full = self.w_ckv(x)                  # (B, L, latent_dim)
-        k_latent = self.split_heads_latent(k_latent_full, batch_size, name='K_latent')
+        k_latent_full = self.w_ckv(x)                 # (B, L, latent_dim)
+        
+        # K is broadcast to all heads.
+        # k_latent needs to be (B, H, L, latent_dim) to match Q
+        # or (B, 1, L, latent_dim) for broadcasting in attention
+        # Wait, scaled_dot expects (..., seq_len, depth)
+        # q is (B, H, L, latent_dim)
+        # k needs to be (..., seq_len_k, depth)
+        
+        # Let's look at scaled_dot_product_attention:
+        # matmul_qk = tf.matmul(q, k, transpose_b=True)
+        # q: (..., L_q, D)
+        # k: (..., L_k, D)
+        
+        # So we want k to be (B, 1, L, latent_dim) so it broadcasts over H dimension of q?
+        # Yes, tf.matmul supports broadcasting.
+        k_latent = tf.expand_dims(k_latent_full, axis=1) # (B, 1, L, latent_dim)
 
-        v_full = tf.matmul(k_latent_full, self.wuv.kernel)  # (B, L, d_model)
-        v = self.split_heads(v_full, batch_size, name='V')
+        v_full = self.wuv(k_latent_full)  # (B, L, d_model)
+        v = self.split_heads(v_full, batch_size, name='V')  # (B, H, L, depth)
 
         # ---- Attention ----
+        # attn weights shape: (B, H, L_q, L_k)
         attn, attn_weights, qk_values = scaled_dot_product_attention(
             q, k_latent, v,
             mask=mask,
@@ -234,7 +257,7 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
 
         output = self.out_proj(attn)
         
-        return output, attn_weights, qk_values, (q,k_latent,v)
+        return output, attn_weights, qk_values, (q, k_latent, v)
 
     def attend_with_cached_kv(self, x_q, kv_cache, mask=None):
         """
@@ -245,13 +268,15 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
 
         # Query
         q_full = self.wq(x_q)
-        q_latent = tf.matmul(q_full, self.wuk.kernel, transpose_b=True)
-        q = self.split_heads_latent(q_latent, batch_size)
+        q_latent_all = self.wuk(q_full)
+        q = self.split_heads_latent_query(q_latent_all, batch_size) # (B, H, 1, latent_dim)
 
         # Cached K/V
-        k_latent = self.split_heads_latent(kv_cache, batch_size)
-        v_full = tf.matmul(kv_cache, self.wuv.kernel)
-        v = self.split_heads(v_full, batch_size)
+        # kv_cache is (B, L_k, latent_dim)
+        k_latent = tf.expand_dims(kv_cache, axis=1) # (B, 1, L_k, latent_dim)
+        
+        v_full = self.wuv(kv_cache) # (B, L_k, d_model)
+        v = self.split_heads(v_full, batch_size)      # (B, H, L_k, depth)
 
         attn, attn_weights, qk = scaled_dot_product_attention(
             q, k_latent, v,
