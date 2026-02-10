@@ -175,7 +175,6 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.latent_dim = latent_dim
-        # No longer splitting latent_dim per head
 
         self.d_model = num_heads * head_dim
         self.depth = head_dim
@@ -185,19 +184,12 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         self.temperature = temperature
 
         # Projections
-        self.wq = tf.keras.layers.Dense(self.d_model, name="WQ")
+        self.wq = tf.keras.layers.Dense(self.num_heads * self.latent_dim, name="WQ")
         # Projects to latent_dim (shared compressed Key)
         self.w_ckv = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_CKV")
         
-        # Projects Query to (num_heads * latent_dim) so each head compares in latent space
-        self.wuk = tf.keras.layers.Dense(self.num_heads * self.latent_dim, use_bias=False, name="WUK")
-        
         # Reconstructs Value from latent (shared compressed V source)
-        #self.wuv = tf.keras.layers.Dense(self.d_model, use_bias=False, name="WUV")
         self.wuv = tf.keras.layers.Dense(self.num_heads * self.head_dim, use_bias=False, name="WUV")
-  
-        # self.wuk.build((None, self.d_model)) # input to wuk is WQ(x) which is d_model
-        # self.wuv.build((None, self.latent_dim))
 
         self.out_proj = tf.keras.layers.Dense(self.d_model, name="attmerge")
 
@@ -223,36 +215,30 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         """
         batch_size = tf.shape(x)[0]
 
-        # ---- Q path ----
-        q_full = self.wq(x)                           # (B, L, d_model)
-        
-        # Project Q to latent space for each head
-        # We map d_model -> num_heads * latent_dim
-        q_latent_all = self.wuk(q_full)               # (B, L, H * latent_dim)
+        # ---- Q path: single projection to latent ----    
+        q_latent_all = self.wq(x)  # (B, L, H * latent_dim)
         q = self.split_heads_latent_query(q_latent_all, batch_size, name='Q_latent') # (B, H, L, latent_dim)
 
         # ---- K/V path (latent compressed) ----
         k_latent_full = self.w_ckv(x)                 # (B, L, latent_dim)
-        
-        # K is broadcast to all heads.
-        # k_latent needs to be (B, H, L, latent_dim) to match Q
-        # or (B, 1, L, latent_dim) for broadcasting in attention
-        # Wait, scaled_dot expects (..., seq_len, depth)
-        # q is (B, H, L, latent_dim)
-        # k needs to be (..., seq_len_k, depth)
-        
-        # Let's look at scaled_dot_product_attention:
-        # matmul_qk = tf.matmul(q, k, transpose_b=True)
-        # q: (..., L_q, D)
-        # k: (..., L_k, D)
-        
-        # So we want k to be (B, 1, L, latent_dim) so it broadcasts over H dimension of q?
-        # Yes, tf.matmul supports broadcasting.
         k_latent = tf.expand_dims(k_latent_full, axis=1) # (B, 1, L, latent_dim)
 
         v_latent_all = self.wuv(k_latent_full)     # (B, L, H * head_dim)
         v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
         v = tf.transpose(v, [0, 2, 1, 3])          # (B, H, L, head_dim)
+
+        tf.debugging.assert_equal(
+            tf.shape(q)[1:], [self.num_heads, tf.shape(x)[1], self.latent_dim],
+            message="Q shape mismatch"
+        )
+        tf.debugging.assert_equal(
+            tf.shape(k_latent)[1:], [1, tf.shape(x)[1], self.latent_dim],
+            message="K shape mismatch"
+        )
+        tf.debugging.assert_equal(
+            tf.shape(v)[1:], [self.num_heads, tf.shape(x)[1], self.head_dim],
+            message="V shape mismatch"
+        )
 
         # ---- Attention ----
         # attn weights shape: (B, H, L_q, L_k)
@@ -279,16 +265,16 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         batch_size = tf.shape(x_q)[0]
 
         # Query
-        q_full = self.wq(x_q)
-        q_latent_all = self.wuk(q_full)
+        q_latent_all = self.wq(x_q)            # (B, 1, H * latent_dim)
         q = self.split_heads_latent_query(q_latent_all, batch_size) # (B, H, 1, latent_dim)
 
         # Cached K/V
         # kv_cache is (B, L_k, latent_dim)
         k_latent = tf.expand_dims(kv_cache, axis=1) # (B, 1, L_k, latent_dim)
         
-        v_full = self.wuv(kv_cache) # (B, L_k, d_model)
-        v = self.split_heads(v_full, batch_size)      # (B, H, L_k, depth)
+        v_latent_all = self.wuv(kv_cache)  # (B, L_k, H * head_dim)
+        v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
+        v = tf.transpose(v, [0, 2, 1, 3])  # (B, H, L_k, head_dim)
 
         attn, attn_weights, qk = scaled_dot_product_attention(
             q, k_latent, v,
@@ -309,6 +295,9 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         config = {
             "num_heads": self.num_heads,
             "head_dim": self.head_dim,
-            "latent_dim": self.latent_dim 
+            "latent_dim": self.latent_dim,
+            "m_alpha": self.m_alpha,
+            "mask_format": self.mask_format,
+            "temperature": self.temperature 
         }
         return {**base_config, **config}
