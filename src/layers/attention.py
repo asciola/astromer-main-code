@@ -152,6 +152,16 @@ class HeadAttentionMulti(tf.keras.layers.Layer):
         return {**base_config, **config}
 
 class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
+    """
+Multi-head latent attention with KV compression.
+    
+Architecture:
+- Input (d_model) → Compressed K/V (latent_dim) [shared across heads]
+- Q projected per-head to latent_dim for comparison
+- V reconstructed from latent to full d_model
+    
+Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
+"""
     def __init__(self,
                  head_dim,
                  num_heads,
@@ -183,8 +193,9 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
         self.wuk = tf.keras.layers.Dense(self.num_heads * self.latent_dim, use_bias=False, name="WUK")
         
         # Reconstructs Value from latent (shared compressed V source)
-        self.wuv = tf.keras.layers.Dense(self.d_model, use_bias=False, name="WUV")
-
+        #self.wuv = tf.keras.layers.Dense(self.d_model, use_bias=False, name="WUV")
+        self.wuv = tf.keras.layers.Dense(self.num_heads * self.head_dim, use_bias=False, name="WUV")
+  
         # self.wuk.build((None, self.d_model)) # input to wuk is WQ(x) which is d_model
         # self.wuv.build((None, self.latent_dim))
 
@@ -239,8 +250,9 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
         # Yes, tf.matmul supports broadcasting.
         k_latent = tf.expand_dims(k_latent_full, axis=1) # (B, 1, L, latent_dim)
 
-        v_full = self.wuv(k_latent_full)  # (B, L, d_model)
-        v = self.split_heads(v_full, batch_size, name='V')  # (B, H, L, depth)
+        v_latent_all = self.wuv(k_latent_full)     # (B, L, H * head_dim)
+        v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
+        v = tf.transpose(v, [0, 2, 1, 3])          # (B, H, L, head_dim)
 
         # ---- Attention ----
         # attn weights shape: (B, H, L_q, L_k)
