@@ -185,12 +185,16 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
 
         # Projections
         self.wq = tf.keras.layers.Dense(self.num_heads * self.latent_dim, name="WQ")
-        # Projects to latent_dim (shared compressed Key)
-        self.w_ckv = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_CKV")
+        # Separate K compression (shared across heads)
+        self.w_k = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_K")
         
-        # Reconstructs Value from latent (shared compressed V source)
-        self.wuv = tf.keras.layers.Dense(self.num_heads * self.head_dim, use_bias=False, name="WUV")
-
+        # Separate V path: compress then reconstruct
+        self.w_v_compress = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_V_compress")
+        self.w_v_reconstruct = tf.keras.layers.Dense(
+            self.num_heads * self.head_dim, 
+            use_bias=False, 
+            name="W_V_reconstruct"
+        )
         self.out_proj = tf.keras.layers.Dense(self.d_model, name="attmerge")
 
     def split_heads(self, x, batch_size, name='qkv'):
@@ -205,9 +209,11 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
     def compute_latent_kv(self, x):
         """
         x: (batch, seq_len, d_model)
-        returns: (batch, seq_len, latent_dim) -> compressed Key/Value source
+        returns: tuple of (k_latent, v_latent) each (batch, seq_len, latent_dim)
         """
-        return self.w_ckv(x)
+        k_latent = self.w_k(x)  # (B, L, latent_dim)
+        v_latent = self.w_v_compress(x)  # (B, L, latent_dim)
+        return k_latent, v_latent
 
     def call(self, x, mask=None, training=None):
         """
@@ -219,13 +225,15 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         q_latent_all = self.wq(x)  # (B, L, H * latent_dim)
         q = self.split_heads_latent_query(q_latent_all, batch_size, name='Q_latent') # (B, H, L, latent_dim)
 
-        # ---- K/V path (latent compressed) ----
-        k_latent_full = self.w_ckv(x)                 # (B, L, latent_dim)
-        k_latent = tf.expand_dims(k_latent_full, axis=1) # (B, 1, L, latent_dim)
+        # ---- K path (compressed, shared across heads) ----
+        k_latent_full = self.w_k(x)  # (B, L, latent_dim)
+        k_latent = tf.expand_dims(k_latent_full, axis=1)  # (B, 1, L, latent_dim)
 
-        v_latent_all = self.wuv(k_latent_full)     # (B, L, H * head_dim)
+        # ---- V path (separate compression + reconstruction) ----
+        v_compressed = self.w_v_compress(x)  # (B, L, latent_dim)
+        v_latent_all = self.w_v_reconstruct(v_compressed)  # (B, L, H * head_dim)
         v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
-        v = tf.transpose(v, [0, 2, 1, 3])          # (B, H, L, head_dim)
+        v = tf.transpose(v, [0, 2, 1, 3])  # (B, H, L, head_dim)
 
         tf.debugging.assert_equal(
             tf.shape(q)[1:], [self.num_heads, tf.shape(x)[1], self.latent_dim],
@@ -260,19 +268,22 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
     def attend_with_cached_kv(self, x_q, kv_cache, mask=None):
         """
         x_q: (batch, 1, d_model)
-        kv_cache: (batch, seq_len_k, latent_dim)
+        kv_cache: tuple of (k_cache, v_cache), each (batch, seq_len_k, latent_dim)
         """
         batch_size = tf.shape(x_q)[0]
+
+        # Unpack cache
+        k_cache, v_cache = kv_cache
 
         # Query
         q_latent_all = self.wq(x_q)            # (B, 1, H * latent_dim)
         q = self.split_heads_latent_query(q_latent_all, batch_size) # (B, H, 1, latent_dim)
 
-        # Cached K/V
-        # kv_cache is (B, L_k, latent_dim)
-        k_latent = tf.expand_dims(kv_cache, axis=1) # (B, 1, L_k, latent_dim)
+        # Cached K (shared across heads)
+        k_latent = tf.expand_dims(k_cache, axis=1)  # (B, 1, L_k, latent_dim)
         
-        v_latent_all = self.wuv(kv_cache)  # (B, L_k, H * head_dim)
+        # Cached V (reconstruct from compressed)
+        v_latent_all = self.w_v_reconstruct(v_cache)  # (B, L_k, H * head_dim)
         v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
         v = tf.transpose(v, [0, 2, 1, 3])  # (B, H, L_k, head_dim)
 

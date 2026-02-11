@@ -28,6 +28,8 @@ class AttentionBlock(tf.keras.layers.Layer):
         if use_cache:
             if latent_dim is not None:
                 self.mha = SimpleHeadAttentionMultiLatent(self.head_dim, self.num_heads, self.latent_dim, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
+            else:
+                raise ValueError("latent_dim required when use_cache=True")
         else:
             self.mha = HeadAttentionMulti(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
         self.ffn = point_wise_feed_forward_network(self.num_heads*self.head_dim, 
@@ -76,13 +78,15 @@ class AttentionBlock(tf.keras.layers.Layer):
 
         # Normalize kv_cache to a Tensor to avoid Graph/Literal mismatch issues
         if kv_cache is None:
-             l_dim = self.latent_dim if self.latent_dim else 1
-             kvc = tf.zeros((batch_size, 0, l_dim))
+            l_dim = self.latent_dim if self.latent_dim else 1
+            kvc = (tf.zeros((batch_size, 0, l_dim)), 
+                   tf.zeros((batch_size, 0, l_dim)))  # Tuple of (k_cache, v_cache)
         else:
-             kvc = kv_cache
+            kvc = kv_cache
 
         # Decision variables as Tensors
-        has_cache_tensor = tf.greater(tf.shape(kvc)[1], 0)
+        # Check the first element of the tuple (k_cache)
+        has_cache_tensor = tf.greater(tf.shape(kvc[0])[1], 0)
         
         # Recurrent mode condition
         use_recurrent = tf.logical_and(
@@ -97,26 +101,30 @@ class AttentionBlock(tf.keras.layers.Layer):
             def first_step():
                 m_step = m_q[:, :, :1] if m_q is not None else None
                 out, w, qk, qkv_tuple = self.mha(x_q, mask=m_step, training=False)
-                nc = self.mha.compute_latent_kv(x_q)
+                k_new, v_new = self.mha.compute_latent_kv(x_q)  # Now returns tuple
+                nc = (k_new, v_new)  # Cache is now a tuple
                 return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
 
             def update_step():
                 out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q, kvc, m_q)
-                new_kv = self.mha.compute_latent_kv(x_q)
-                nc = tf.concat([kvc, new_kv], axis=1)
+                k_new, v_new = self.mha.compute_latent_kv(x_q)
+                k_cache, v_cache = kvc
+                nc = (tf.concat([k_cache, k_new], axis=1), 
+                      tf.concat([v_cache, v_new], axis=1))
                 return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
-
             return tf.cond(has_cache_tensor, update_step, first_step)
 
         def full_sequence_path():
             out, w, qk, qkv_tuple = self.mha(x, mask=mask, training=training)
             
             def compute_prefill():
-                return self.mha.compute_latent_kv(x)
-            
+                k_lat, v_lat = self.mha.compute_latent_kv(x)
+                return (k_lat, v_lat)
+
             def compute_empty():
                 l_dim = self.latent_dim if self.latent_dim else 1
-                return tf.zeros((batch_size, 0, l_dim))
+                return (tf.zeros((batch_size, 0, l_dim)),
+                        tf.zeros((batch_size, 0, l_dim)))
                 
             nc = tf.cond(tf.logical_and(can_use_cache, tf.logical_not(is_training)),
                          compute_prefill, compute_empty)
