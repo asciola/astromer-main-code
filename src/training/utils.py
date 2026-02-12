@@ -152,6 +152,9 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             # Get a single batch for monitoring
             sample_batch = next(iter(train_data))
             check_attention_health(model, sample_batch)
+        else:
+            print("[INFO] Skipping attention check for epoch {}".format(epoch))
+
         pbar.set_postfix(item1=epoch)
         epoch_tr_rmse    = []
         epoch_tr_rsquare = []
