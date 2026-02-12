@@ -91,7 +91,12 @@ class CustomModel(Model):
         super().__init__(*args, **kwargs)
         self.loss_format = loss_format
         self.correct_loss = correct_loss
-        
+    
+    def call(self, inputs, training=None):
+        """Override call to cast output to float32 for mixed precision"""
+        output = super().call(inputs, training=training)
+        return tf.cast(output, tf.float32)
+    
     def train_step(self, data):
         x, y = data
         with tf.GradientTape() as tape:

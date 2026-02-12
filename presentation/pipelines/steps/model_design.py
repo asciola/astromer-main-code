@@ -192,6 +192,11 @@ def build_classifier(astromer, params, astromer_trainable, num_cls=None, arch='a
 class CustomModel(tf.keras.Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    def call(self, inputs, training=None):
+        """Override call to cast output to float32 for mixed precision"""
+        output = super().call(inputs, training=training)
+        return tf.cast(output, tf.float32)
     
     def predict_step(self, data):
         x, y = data

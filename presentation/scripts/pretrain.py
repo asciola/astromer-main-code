@@ -1,4 +1,7 @@
 import tensorflow as tf
+from tensorflow.keras import mixed_precision
+mixed_precision.set_global_policy('mixed_float16')
+
 import argparse
 import math
 import toml
