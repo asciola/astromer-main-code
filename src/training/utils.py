@@ -95,6 +95,45 @@ def log_system_metrics(writer, step, epoch=None, batch=None):
         if batch is not None:
             tf.summary.scalar('batch', batch, step=step)
     
+def check_attention_health(model, sample_batch):
+    """
+    Performs a forward pass on one batch and prints attention stats.
+    Add this to utils.py.
+    """
+    x, _ = sample_batch
+    
+    # Attempt to find the first AttentionBlock in your model hierarchy
+    target_block = None
+    for submodule in model.submodules:
+        if "AttentionBlock" in str(type(submodule)):
+            target_block = submodule
+            break
+            
+    if target_block is None:
+        print("\n[DEBUG] Could not find an AttentionBlock to monitor.")
+        return
+
+    # Call the block directly with return_weights=True
+    # Note: This is an approximation as it uses the raw input 'x' 
+    # rather than the processed activations from previous layers, 
+    # but it is usually enough to see if the weights are uniform.
+    try:
+        _, att_w, _, _, _ = target_block(x, training=False, return_weights=True)
+        
+        std_weight = tf.math.reduce_std(att_w).numpy()
+        max_weight = tf.reduce_max(att_w).numpy()
+        
+        print(f"\n[ATTENTION MONITOR] Epoch Step")
+        print(f"  - Weight Std Dev: {std_weight:.8f}")
+        print(f"  - Max Weight:     {max_weight:.8f}")
+        
+        if std_weight < 1e-5:
+            print("  - STATUS: CRITICAL (Uniform Attention detected)")
+        else:
+            print("  - STATUS: OK (Model is differentiating tokens)")
+    except Exception as e:
+        print(f"\n[DEBUG] Monitor failed: {e}")
+
 def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_patience=20, test_data=None, project_folder=''):
     train_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'train'))
     valid_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'validation'))
@@ -109,6 +148,10 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
     step = 0
     
     for epoch in pbar:
+        if epoch % 5 == 0:  # Check every 5 epochs
+            # Get a single batch for monitoring
+            sample_batch = next(iter(train_data))
+            check_attention_health(model, sample_batch)
         pbar.set_postfix(item1=epoch)
         epoch_tr_rmse    = []
         epoch_tr_rsquare = []
