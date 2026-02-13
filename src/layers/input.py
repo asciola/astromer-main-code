@@ -47,11 +47,15 @@ class AddMSKToken(Layer):
                         trainable=self.trainable,)
 
     def call(self, inputs):
+        # Get the dtype from inputs
+        compute_dtype = inputs['mask_in'].dtype
+
         # Cast msk_token to match input dtype (float16 in mixed precision)
-        msk_token = tf.cast(self.msk_token, inputs['mask_in'].dtype)
-        msk_token = tf.tile(self.msk_token, [self.window_size, 1])
+        msk_token_cast = tf.cast(self.msk_token, compute_dtype)
+        msk_token = tf.tile(msk_token_cast, [self.window_size, 1])
         for key in self.on:
-            partial = tf.multiply(inputs[key], 1.-inputs['mask_in'])
+            one = tf.cast(1., compute_dtype)
+            partial = tf.multiply(inputs[key], one - inputs['mask_in'])
             partial_mask = tf.multiply(inputs['mask_in'], msk_token)
             partial = tf.add(partial, partial_mask)
             inputs[key] = partial 
