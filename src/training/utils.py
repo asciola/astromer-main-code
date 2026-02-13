@@ -158,6 +158,9 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
     min_loss = 1e9
     step = 0
     
+    # Store steps per epoch once determined
+    steps_per_epoch = None
+    
     for epoch in pbar:
         if epoch % 5 == 0:  # Check every 5 epochs
             check_attention_health(model, sample_batch, pbar)
@@ -174,13 +177,21 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         epoch_vl_loss    = []
 
         for numbatch, batch in enumerate(train_data):
-            pbar.set_postfix(item=numbatch)
+            if steps_per_epoch is not None:
+                pbar.set_postfix(item="{}/{}".format(numbatch, steps_per_epoch))
+            else:
+                pbar.set_postfix(item="{}".format(numbatch))
+
             metrics = train_step(model, batch, optimizer)
             epoch_tr_rmse.append(metrics['rmse'])
             epoch_tr_rsquare.append(metrics['rsquare'])
             epoch_tr_loss.append(metrics['loss'])
             log_system_metrics(train_writer, step, epoch=epoch, batch=numbatch)
             step += 1
+            
+        # Set steps_per_epoch after the first epoch
+        if steps_per_epoch is None:
+            steps_per_epoch = numbatch + 1
 
         # Clear caches before test_steps
         if hasattr(model, 'encoder'):
