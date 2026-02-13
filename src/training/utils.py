@@ -105,14 +105,16 @@ def check_attention_health(model, sample_batch, pbar=None):
     # Improved search: look through all layers and sub-layers
     target_block = None
     for layer in model.layers:
-        # Check if the layer is an AttentionBlock or contains one
-        if "AttentionBlock" in str(type(layer)):
+        # Check if the layer is an AttentionBlock (but NOT HeadAttentionMulti)
+        layer_type = str(type(layer))
+        if "AttentionBlock" in layer_type and "HeadAttentionMulti" not in layer_type:
             target_block = layer
             break
         # Support for nested models (like an Encoder containing blocks)
         if hasattr(layer, 'layers'):
             for sublayer in layer.layers:
-                if "AttentionBlock" in str(type(sublayer)):
+                sublayer_type = str(type(sublayer))
+                if "AttentionBlock" in sublayer_type and "HeadAttentionMulti" not in sublayer_type:
                     target_block = sublayer
                     break
         if target_block: break
