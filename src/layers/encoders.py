@@ -135,7 +135,7 @@ class SkipEncoder(Encoder):
         x, window_size = self.input_format(inputs)  
         x = self.dropout_layer(x, training=training)
 
-        att_outputs = tf.TensorArray(dtype=tf.float32, 
+        att_outputs = tf.TensorArray(dtype=x.dtype, 
                                      size=self.num_layers, 
                                      name='skip_att')
         for i in range(self.num_layers):

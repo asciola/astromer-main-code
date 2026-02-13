@@ -39,18 +39,18 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK'):
         steps = tf.shape(scaled_attention_logits)[2]
         mask_rshp = tf.tile(mask, [1,1,steps])
         mask_rshp = tf.transpose(mask_rshp, [0,2,1])
-        mask_rshp = tf.minimum(1., mask_rshp)
+        mask_rshp = tf.minimum(tf.cast(1., mask_rshp.dtype), mask_rshp)
         mask_rshp = tf.expand_dims(mask_rshp, 1)
-        scaled_attention_logits += (mask_rshp*m_alpha)
+        scaled_attention_logits += (mask_rshp * tf.cast(m_alpha, mask_rshp.dtype))
     
     if mask_format == 'QK':
         print('[INFO] Masking Query and Key tokens')
         steps = tf.shape(scaled_attention_logits)[2]
         mask_rshp = tf.tile(mask, [1,1,steps])
         mask_rshp += tf.transpose(mask_rshp, [0,2,1])
-        mask_rshp = tf.minimum(1., mask_rshp)
+        mask_rshp = tf.minimum(tf.cast(1., mask_rshp.dtype), mask_rshp)
         mask_rshp = tf.expand_dims(mask_rshp, 1)
-        scaled_attention_logits += mask_rshp*m_alpha
+        scaled_attention_logits += (mask_rshp * tf.cast(m_alpha, mask_rshp.dtype))
     
     # softmax is normalized on the last axis (seq_len_k) so that the scores add up to 1.
     attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1, name='MaskedSoftMax')  # (..., seq_len_q, seq_len_k)

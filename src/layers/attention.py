@@ -22,7 +22,8 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK', tempe
     dk_sqrt = tf.cast(tf.math.sqrt(dk), matmul_qk.dtype)
     scaled_attention_logits = matmul_qk / dk_sqrt
     if temperature != 0.:
-        scaled_attention_logits = scaled_attention_logits * (1/temperature)
+        temp_cast = tf.cast(1./temperature, scaled_attention_logits.dtype)
+        scaled_attention_logits = scaled_attention_logits * temp_cast
     
     qk_values = scaled_attention_logits
     if mask_format == 'K':
@@ -36,9 +37,9 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK', tempe
                 return tf.cond(is_single_col, do_tile, lambda: mask)
 
             mask_rshp = tf.cond(tf.equal(tf.rank(mask), 3), tile_mask_k, lambda: mask)
-            mask_rshp = tf.minimum(1., mask_rshp)
+            mask_rshp = tf.minimum(tf.cast(1., mask_rshp.dtype), mask_rshp)
             mask_rshp = tf.expand_dims(mask_rshp, 1) 
-            scaled_attention_logits += (mask_rshp*m_alpha)
+            scaled_attention_logits += (mask_rshp * tf.cast(m_alpha, mask_rshp.dtype))
         
         attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1, name='MaskedSoftMax')
 
@@ -52,9 +53,9 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK', tempe
                 return tf.cond(is_single_col, do_tile, lambda: mask)
 
             mask_rshp = tf.cond(tf.equal(tf.rank(mask), 3), tile_mask_q, lambda: mask)
-            mask_rshp = tf.minimum(1., mask_rshp)
+            mask_rshp = tf.minimum(tf.cast(1., mask_rshp.dtype), mask_rshp)
             mask_rshp = tf.expand_dims(mask_rshp, 1)
-            scaled_attention_logits += (mask_rshp*m_alpha)
+            scaled_attention_logits += (mask_rshp * tf.cast(m_alpha, mask_rshp.dtype))
         attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1, name='MaskedSoftMax')
         
     if mask_format == 'QK':
@@ -76,9 +77,9 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK', tempe
                                lambda: mask_rshp)
 
             mask_rshp = symmetric_mask()
-            mask_rshp = tf.minimum(1., mask_rshp)
+            mask_rshp = tf.minimum(tf.cast(1., mask_rshp.dtype), mask_rshp)
             mask_rshp = tf.expand_dims(mask_rshp, 1)
-            scaled_attention_logits += mask_rshp*m_alpha            
+            scaled_attention_logits += (mask_rshp * tf.cast(m_alpha, mask_rshp.dtype))            
         attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1, name='MaskedSoftMax')
     
     if mask_format == 'tanh':
