@@ -14,10 +14,13 @@ class GammaWeight(Layer):
         initial_value = tf.ones([input_shape[0]]) * 1/input_shape[0]
         self.gamma = tf.Variable(initial_value=initial_value,
                                  trainable=True,
+                                 dtype=tf.float32,
                                  name='gamma')
         
     def call(self, inputs, training):
-        gamma = self.softmax_act(tf.expand_dims(self.gamma, 0))
+        # Cast gamma to match input dtype
+        gamma = tf.cast(self.gamma, inputs.dtype)
+        gamma = self.softmax_act(tf.expand_dims(gamma, 0))
         gamma = tf.reshape(gamma, [tf.shape(inputs)[0], 1, 1])
         x = tf.multiply(inputs, gamma)
         x = tf.reduce_mean(x, axis=0)
@@ -44,6 +47,8 @@ class AddMSKToken(Layer):
                         trainable=self.trainable,)
 
     def call(self, inputs):
+        # Cast msk_token to match input dtype (float16 in mixed precision)
+        msk_token = tf.cast(self.msk_token, inputs['mask_in'].dtype)
         msk_token = tf.tile(self.msk_token, [self.window_size, 1])
         for key in self.on:
             partial = tf.multiply(inputs[key], 1.-inputs['mask_in'])
