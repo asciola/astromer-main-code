@@ -117,7 +117,10 @@ def check_attention_health(model, sample_batch, pbar=None):
                     break
         if target_block: break
 
-    log_func = pbar.write if pbar else print
+    def log_func(msg):
+        print(msg, flush=True)  # Force immediate flush
+        if pbar:
+            pbar.write(msg)
 
     if target_block is None:
         log_func("[DEBUG] Could not find an AttentionBlock to monitor.")
@@ -166,6 +169,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             check_attention_health(model, sample_batch, pbar)
         else:
             # Use pbar.write to avoid standard print buffering issues
+            print(f"[INFO] Training Epoch {epoch}...", flush=True)
             pbar.write(f"[INFO] Training Epoch {epoch}...")
         
         pbar.set_postfix(item1=epoch)
