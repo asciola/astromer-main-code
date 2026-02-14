@@ -49,8 +49,14 @@ def train_step(model, inputs, optimizer):
         loss = rmse
 
         gradients = tape.gradient(loss, model.trainable_variables)
+
+        grad_norms = [tf.norm(g) for g in gradients if g is not None]
+        max_grad = tf.reduce_max(grad_norms) if len(grad_norms) > 0 else tf.constant(0.0)
+        mean_grad = tf.reduce_mean(grad_norms) if len(grad_norms) > 0 else tf.constant(0.0)
+        min_grad = tf.reduce_min(grad_norms) if len(grad_norms) > 0 else tf.constant(0.0)
+
         optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-    return {'loss':loss, 'rmse': rmse, 'rsquare':r2_value}
+    return {'loss':loss, 'rmse': rmse, 'rsquare':r2_value, 'max_grad':max_grad, 'mean_grad':mean_grad, 'min_grad':min_grad}
 
 @tf.function()
 def test_step(model, inputs):
@@ -94,61 +100,6 @@ def log_system_metrics(writer, step, epoch=None, batch=None):
             tf.summary.scalar('epoch', epoch, step=step)
         if batch is not None:
             tf.summary.scalar('batch', batch, step=step)
-    
-def check_attention_health(model, sample_batch, pbar=None):
-    """
-    Performs a forward pass on one batch and prints attention stats.
-    Using pbar.write ensures it doesn't get swallowed by the progress bar.
-    """
-    x, _ = sample_batch
-    
-    # Improved search: look through all layers and sub-layers
-    target_block = None
-    for layer in model.layers:
-        # Check if the layer is an AttentionBlock (but NOT HeadAttentionMulti)
-        layer_type = str(type(layer))
-        if "AttentionBlock" in layer_type and "HeadAttentionMulti" not in layer_type:
-            target_block = layer
-            break
-        # Support for nested models (like an Encoder containing blocks)
-        if hasattr(layer, 'layers'):
-            for sublayer in layer.layers:
-                sublayer_type = str(type(sublayer))
-                if "AttentionBlock" in sublayer_type and "HeadAttentionMulti" not in sublayer_type:
-                    target_block = sublayer
-                    break
-        if target_block: break
-
-    def log_func(msg):
-        print(msg, flush=True)  # Force immediate flush
-        if pbar:
-            pbar.write(msg)
-
-    if target_block is None:
-        log_func("[DEBUG] Could not find an AttentionBlock to monitor.")
-        return
-
-    try:
-        # Extract just the input tensor if x is a dict
-        input_x = x['input'] if isinstance(x, dict) else x
-        # We use training=False to avoid dropout/noise during the check
-        # and return_weights=True as defined in attblock.py
-        _, att_w, _, _, _ = target_block(input_x, training=False, return_weights=True)
-        
-        std_weight = tf.math.reduce_std(att_w).numpy()
-        max_weight = tf.reduce_max(att_w).numpy()
-        
-        log_func(f"\n--- ATTENTION HEALTH (Epoch Step) ---")
-        log_func(f"  - Weight Std Dev: {std_weight:.8f}")
-        log_func(f"  - Max Weight:     {max_weight:.8f}")
-        
-        if std_weight < 1e-5:
-            log_func("  - STATUS: CRITICAL (Weights are uniform/averaging)")
-        else:
-            log_func("  - STATUS: OK (Model is learning token variance)")
-        log_func("--------------------------------------\n")
-    except Exception as e:
-        log_func(f"[DEBUG] Health monitor failed: {e}")
 
 def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_patience=20, test_data=None, project_folder=''):
     train_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'train'))
@@ -169,17 +120,13 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
     steps_per_epoch = None
     
     for epoch in pbar:
-        if epoch % 5 == 0:  # Check every 5 epochs
-            check_attention_health(model, sample_batch, pbar)
-        else:
-            # Use pbar.write to avoid standard print buffering issues
-            print(f"[INFO] Training Epoch {epoch}...", flush=True)
-            pbar.write(f"[INFO] Training Epoch {epoch}...")
-        
         pbar.set_postfix(item1=epoch)
         epoch_tr_rmse    = []
         epoch_tr_rsquare = []
         epoch_tr_loss    = []
+        epoch_tr_max_grad = []
+        epoch_tr_mean_grad = []
+        epoch_tr_min_grad = []
         epoch_vl_rmse    = []
         epoch_vl_rsquare = []
         epoch_vl_loss    = []
@@ -194,6 +141,9 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             epoch_tr_rmse.append(metrics['rmse'])
             epoch_tr_rsquare.append(metrics['rsquare'])
             epoch_tr_loss.append(metrics['loss'])
+            epoch_tr_max_grad.append(metrics['max_grad'])
+            epoch_tr_mean_grad.append(metrics['mean_grad'])
+            epoch_tr_min_grad.append(metrics['min_grad'])
             log_system_metrics(train_writer, step, epoch=epoch, batch=numbatch)
             step += 1
             
@@ -217,6 +167,9 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         vl_rsquare = tf.reduce_mean(epoch_vl_rsquare)
         tr_loss    = tf.reduce_mean(epoch_tr_loss)
         vl_loss    = tf.reduce_mean(epoch_vl_loss)
+        tr_max_grad = tf.reduce_mean(epoch_tr_max_grad)
+        tr_mean_grad = tf.reduce_mean(epoch_tr_mean_grad)
+        tr_min_grad = tf.reduce_mean(epoch_tr_min_grad)
 
         tensorboard_log('loss', tr_loss, train_writer, step=epoch)
         tensorboard_log('loss', vl_loss, valid_writer, step=epoch)
@@ -226,6 +179,10 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         
         tensorboard_log('rsquare', tr_rsquare, train_writer, step=epoch)
         tensorboard_log('rsquare', vl_rsquare, valid_writer, step=epoch)
+        
+        tensorboard_log('gradient/max', tr_max_grad, train_writer, step=epoch)
+        tensorboard_log('gradient/mean', tr_mean_grad, train_writer, step=epoch)
+        tensorboard_log('gradient/min', tr_min_grad, train_writer, step=epoch)
         
         if tf.math.greater(min_loss, vl_rmse):
             min_loss = vl_rmse
