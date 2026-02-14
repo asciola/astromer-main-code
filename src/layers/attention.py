@@ -15,6 +15,11 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK', tempe
     Returns:
     output, attention_weights
     """
+    # Ensure all tensors are the same dtype
+    target_dtype = q.dtype
+    k = tf.cast(k, target_dtype)
+    v = tf.cast(v, target_dtype)
+    
     matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
 
     # scale matmul_qk
