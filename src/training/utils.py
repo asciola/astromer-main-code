@@ -129,9 +129,11 @@ def check_attention_health(model, sample_batch, pbar=None):
         return
 
     try:
+        # Extract just the input tensor if x is a dict
+        input_x = x['input'] if isinstance(x, dict) else x
         # We use training=False to avoid dropout/noise during the check
         # and return_weights=True as defined in attblock.py
-        _, att_w, _, _, _ = target_block(x, training=False, return_weights=True)
+        _, att_w, _, _, _ = target_block(input_x, training=False, return_weights=True)
         
         std_weight = tf.math.reduce_std(att_w).numpy()
         max_weight = tf.reduce_max(att_w).numpy()
