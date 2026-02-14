@@ -79,8 +79,8 @@ class AttentionBlock(tf.keras.layers.Layer):
         # Normalize kv_cache to a Tensor to avoid Graph/Literal mismatch issues
         if kv_cache is None:
             l_dim = self.latent_dim if self.latent_dim else 1
-            kvc = (tf.zeros((batch_size, 0, l_dim)), 
-                   tf.zeros((batch_size, 0, l_dim)))  # Tuple of (k_cache, v_cache)
+            kvc = (tf.zeros((batch_size, 0, l_dim), dtype=x.dtype), 
+                   tf.zeros((batch_size, 0, l_dim), dtype=x.dtype))  # Tuple of (k_cache, v_cache)
         else:
             kvc = kv_cache
 
@@ -109,6 +109,10 @@ class AttentionBlock(tf.keras.layers.Layer):
                 out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q, kvc, m_q)
                 k_new, v_new = self.mha.compute_latent_kv(x_q)
                 k_cache, v_cache = kvc
+                # Cast cached values to match new values dtype for mixed precision
+                k_cache = tf.cast(k_cache, k_new.dtype)
+                v_cache = tf.cast(v_cache, v_new.dtype)
+
                 nc = (tf.concat([k_cache, k_new], axis=1), 
                       tf.concat([v_cache, v_new], axis=1))
                 return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
