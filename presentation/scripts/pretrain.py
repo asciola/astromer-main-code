@@ -28,6 +28,39 @@ from presentation.pipelines.steps.model_design import build_model, load_pt_model
 from presentation.pipelines.steps.load_data import build_loader
 from presentation.pipelines.steps.metrics import evaluate_ft
 
+import subprocess
+
+def verify_gpu_setup():
+    print("-" * 30)
+    print("DEVICE HARDWARE CHECK")
+    
+    # Check TensorFlow's perspective
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("CRITICAL: No GPUs found by TensorFlow!")
+    else:
+        for gpu in gpus:
+            print(f"TensorFlow found: {gpu}")
+
+    # Check the actual hardware name via nvidia-smi
+    try:
+        gpu_name = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            encoding="utf-8"
+        ).strip()
+        print(f"Hardware Identity: {gpu_name}")
+        
+        if "H200" in gpu_name:
+            print("SUCCESS: Running on NVIDIA H200 (Hopper).")
+        else:
+            print(f"WARNING: Expected H200 but found {gpu_name}. Metrics may vary.")
+            
+    except Exception as e:
+        print(f"Could not run nvidia-smi: {e}")
+    print("-" * 30 + "\n")
+
+verify_gpu_setup()
+
 def replace_config(source, target):
     for key in ['data', 'no_cache', 'exp_name', 'checkpoint', 
                 'gpu', 'lr', 'bs', 'patience', 'num_epochs', 'scheduler']:
