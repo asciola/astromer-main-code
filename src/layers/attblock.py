@@ -51,18 +51,26 @@ class AttentionBlock(tf.keras.layers.Layer):
 
         if not self.use_cache:
             # Simple path for when caching is disabled (ignores kv_cache)
-            attn_output, att_w, qk_v, (q_t, k_t, v_t) = self.mha(x, training=training, mask=mask)
+            # PRE-LN: Normalize BEFORE attention
+            x_norm1 = self.layernorm1(x, training=training)
+            attn_output, att_w, qk_v, (q_t, k_t, v_t) = self.mha(x_norm1, training=training, mask=mask)
             
             attn_output = self.dropout1(attn_output, training=training)
+            # Add residual connection
             if self.use_leak:
-                attn_output = self.reshape_leak_1(x) + attn_output
-            attn_output = self.layernorm1(attn_output, training=training)
+                x = self.reshape_leak_1(x) + attn_output
+            else:
+                x = x + attn_output
 
-            ffn_output  = self.ffn(attn_output)
-            ffn_output  = self.dropout2(ffn_output, training=training)
+            # PRE-LN: Normalize BEFORE FFN
+            x_norm2 = self.layernorm2(x, training=training)
+            ffn_output = self.ffn(x_norm2)
+            ffn_output = self.dropout2(ffn_output, training=training)
+            # Add residual connection
             if self.use_leak:
-                ffn_output = self.reshape_leak_2(attn_output) + ffn_output
-            ffn_output = self.layernorm2(ffn_output, training=training)
+                ffn_output = self.reshape_leak_2(x) + ffn_output
+            else:
+                ffn_output = x + ffn_output
 
             if return_weights:
                 return ffn_output, att_w, qk_v, (q_t, k_t, v_t), None
@@ -71,6 +79,9 @@ class AttentionBlock(tf.keras.layers.Layer):
         # Caching path (only traced if use_cache is True)
         batch_size = tf.shape(x)[0]
         seq_len = tf.shape(x)[1]
+        
+        # PRE-LN: Normalize input before attention
+        x_norm1 = self.layernorm1(x, training=training)
         
         # Determine training status as a tensor
         is_training = tf.cast(training, tf.bool)
@@ -95,19 +106,20 @@ class AttentionBlock(tf.keras.layers.Layer):
         )
 
         def recurrent_path():
-            x_q = x[:, -1:, :]
+            x_q_norm = x_norm1[:, -1:, :]  # Use normalized input
+            x_q_orig = x[:, -1:, :]  # Keep original for residual
             m_q = mask[:, -1:, :] if mask is not None else None
             
             def first_step():
                 m_step = m_q[:, :, :1] if m_q is not None else None
-                out, w, qk, qkv_tuple = self.mha(x_q, mask=m_step, training=False)
-                k_new, v_new = self.mha.compute_latent_kv(x_q)  # Now returns tuple
-                nc = (k_new, v_new)  # Cache is now a tuple
+                out, w, qk, qkv_tuple = self.mha(x_q_norm, mask=m_step, training=False)
+                k_new, v_new = self.mha.compute_latent_kv(x_q_norm)
+                nc = (k_new, v_new)
                 return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
 
             def update_step():
-                out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q, kvc, m_q)
-                k_new, v_new = self.mha.compute_latent_kv(x_q)
+                out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q_norm, kvc, m_q)
+                k_new, v_new = self.mha.compute_latent_kv(x_q_norm)
                 k_cache, v_cache = kvc
                 # Cast cached values to match new values dtype for mixed precision
                 k_cache = tf.cast(k_cache, k_new.dtype)
@@ -119,16 +131,16 @@ class AttentionBlock(tf.keras.layers.Layer):
             return tf.cond(has_cache_tensor, update_step, first_step)
 
         def full_sequence_path():
-            out, w, qk, qkv_tuple = self.mha(x, mask=mask, training=training)
+            out, w, qk, qkv_tuple = self.mha(x_norm1, mask=mask, training=training)
             
             def compute_prefill():
-                k_lat, v_lat = self.mha.compute_latent_kv(x)
+                k_lat, v_lat = self.mha.compute_latent_kv(x_norm1)
                 return (k_lat, v_lat)
 
             def compute_empty():
                 l_dim = self.latent_dim if self.latent_dim else 1
-                return (tf.zeros((batch_size, 0, l_dim), dtype=x.dtype),
-                        tf.zeros((batch_size, 0, l_dim), dtype=x.dtype))
+                return (tf.zeros((batch_size, 0, l_dim)),
+                        tf.zeros((batch_size, 0, l_dim)))
                 
             nc = tf.cond(tf.logical_and(can_use_cache, tf.logical_not(is_training)),
                          compute_prefill, compute_empty)
@@ -138,21 +150,26 @@ class AttentionBlock(tf.keras.layers.Layer):
         attn_out, att_w, qk_v, q_t, k_t, v_t, n_cache = tf.cond(
             use_recurrent, recurrent_path, full_sequence_path)
 
-        # Residuals and Post-processing
+        # PRE-LN: Residuals and Post-processing
         attn_out = self.dropout1(attn_out, training=training)
 
+        # Add residual connection after attention
         if self.use_leak:
             leak_x = tf.cond(use_recurrent, lambda: x[:, -1:, :], lambda: x)
-            attn_out = self.reshape_leak_1(leak_x) + attn_out
+            x_after_attn = self.reshape_leak_1(leak_x) + attn_out
+        else:
+            x_after_attn = tf.cond(use_recurrent, lambda: x[:, -1:, :] + attn_out, lambda: x + attn_out)
 
-        attn_out = self.layernorm1(attn_out, training=training)
-        ffn_out  = self.ffn(attn_out)
-        ffn_out  = self.dropout2(ffn_out, training=training)
+        # PRE-LN: Normalize BEFORE FFN
+        ffn_input = self.layernorm2(x_after_attn, training=training)
+        ffn_out = self.ffn(ffn_input)
+        ffn_out = self.dropout2(ffn_out, training=training)
 
+        # Add residual connection after FFN
         if self.use_leak:
-            ffn_out = self.reshape_leak_2(attn_out) + ffn_out
-
-        ffn_out = self.layernorm2(ffn_out, training=training)
+            ffn_out = self.reshape_leak_2(x_after_attn) + ffn_out
+        else:
+            ffn_out = x_after_attn + ffn_out
         
         final_cache_val = n_cache if self.use_cache else None
 
