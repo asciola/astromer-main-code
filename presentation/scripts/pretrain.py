@@ -105,7 +105,8 @@ def run(opt):
                      beta_1=0.9,
                      beta_2=0.98,
                      epsilon=1e-9,
-                     name='astromer_optimizer')
+                     clipnorm=1.0,
+                     name='astromer_optimizer_with_clipnorm')
 
     with open(os.path.join(EXPDIR, 'config.toml'), 'w') as f:
         toml.dump(opt.__dict__, f)
