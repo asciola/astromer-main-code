@@ -1,4 +1,15 @@
 import tensorflow as tf
+
+# Configure GPU memory growth (first)
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"[INFO] Enabled memory growth for {len(gpus)} GPU(s)")
+    except RuntimeError as e:
+        print(f"[WARNING] Could not set memory growth: {e}")
+
 from tensorflow.keras import mixed_precision
 mixed_precision.set_global_policy('mixed_bfloat16')
 
