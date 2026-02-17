@@ -184,7 +184,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         tensorboard_log('gradient/mean', tr_mean_grad, train_writer, step=epoch)
         tensorboard_log('gradient/min', tr_min_grad, train_writer, step=epoch)
         
-        print('[DEBUG] Epoch {} Gradient stats: max={:.3f}, mean={:.3f}, min={:.3f}'.format(epoch, tr_max_grad, tr_mean_grad, tr_min_grad), flush=True)
+        print('[DEBUG] Epoch {} Gradient stats: max={:.4e}, mean={:.4e}, min={:.4e}'.format(epoch, tr_max_grad, tr_mean_grad, tr_min_grad), flush=True)
         if tf.math.greater(min_loss, vl_rmse):
             min_loss = vl_rmse
             es_count = 0
