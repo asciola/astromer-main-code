@@ -139,8 +139,8 @@ class AttentionBlock(tf.keras.layers.Layer):
 
             def compute_empty():
                 l_dim = self.latent_dim if self.latent_dim else 1
-                return (tf.zeros((batch_size, 0, l_dim)),
-                        tf.zeros((batch_size, 0, l_dim)))
+                return (tf.zeros((batch_size, 0, l_dim), dtype=x.dtype),
+                        tf.zeros((batch_size, 0, l_dim), dtype=x.dtype))
                 
             nc = tf.cond(tf.logical_and(can_use_cache, tf.logical_not(is_training)),
                          compute_prefill, compute_empty)
