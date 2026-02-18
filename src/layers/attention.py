@@ -101,7 +101,6 @@ def scaled_dot_product_attention(q, k, v, mask, m_alpha, mask_format='QK', tempe
 
 class HeadAttentionMulti(tf.keras.layers.Layer):
     def __init__(self, head_dim, num_heads, m_alpha, mask_format, temperature):
-        # super(HeadAttentionMulti, self).__init__()
         super().__init__()
         self.num_heads   = num_heads
         self.head_dim    = head_dim
@@ -133,8 +132,6 @@ class HeadAttentionMulti(tf.keras.layers.Layer):
         k = self.split_heads(k, batch_size, name='K')  # (batch_size, num_heads, seq_len_k, depth)
         v = self.split_heads(v, batch_size, name='V')  # (batch_size, num_heads, seq_len_v, depth)
 
-        # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
-        # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
         scaled_attention, attention_weights, qk_values = scaled_dot_product_attention(q, k, v, 
                                                                         mask=mask,
                                                                         m_alpha=self.m_alpha,
@@ -155,20 +152,25 @@ class HeadAttentionMulti(tf.keras.layers.Layer):
         config = {
             "head_dim": self.head_dim,
             "num_heads": self.num_heads,
+            "m_alpha": self.m_alpha,
+            "mask_format": self.mask_format,
+            "temperature": self.temp
         }
         return {**base_config, **config}
 
 class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
     """
-Multi-head latent attention with KV compression.
-    
-Architecture:
-- Input (d_model) → Compressed K/V (latent_dim) [shared across heads]
-- Q projected per-head to latent_dim for comparison
-- V reconstructed from latent to full d_model
-    
-Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
-"""
+    Multi-Head Latent Attention (MHLA) with shared KV compression.
+
+    Architecture (DeepSeek-V2 style):
+      - Shared KV compression: x -> c_kv  (d_model -> latent_dim)
+      - K path: c_kv used directly as keys (shared across heads, dim=latent_dim)
+      - V path: c_kv -> W_v_up -> per-head values (latent_dim -> H*head_dim)
+      - Q path: x -> per-head queries projected to latent_dim for dot product with K
+
+    KV cache stores only c_kv: a single (batch, seq_len, latent_dim) tensor,
+    giving O(L * latent_dim) memory instead of O(L * H * head_dim * 2).
+    """
     def __init__(self,
                  head_dim,
                  num_heads,
@@ -190,18 +192,19 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         self.mask_format = mask_format
         self.temperature = temperature
 
-        # Projections
+        # Q: project to latent_dim per head (matches K's latent_dim for dot product)
         self.wq = tf.keras.layers.Dense(self.num_heads * self.latent_dim, name="WQ")
-        # Separate K compression (shared across heads)
-        self.w_k = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_K")
-        
-        # Separate V path: compress then reconstruct
-        self.w_v_compress = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_V_compress")
-        self.w_v_reconstruct = tf.keras.layers.Dense(
-            self.num_heads * self.head_dim, 
-            use_bias=False, 
-            name="W_V_reconstruct"
+
+        # Shared KV down-projection (single compression for both K and V)
+        self.w_kv_down = tf.keras.layers.Dense(self.latent_dim, use_bias=False, name="W_KV_down")
+
+        # V up-projection: reconstruct per-head values from shared latent
+        self.w_v_up = tf.keras.layers.Dense(
+            self.num_heads * self.head_dim,
+            use_bias=False,
+            name="W_V_up"
         )
+
         self.out_proj = tf.keras.layers.Dense(self.d_model, name="attmerge")
 
     def split_heads(self, x, batch_size, name='qkv'):
@@ -215,12 +218,31 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
 
     def compute_latent_kv(self, x):
         """
+        Shared KV compression. Returns a single latent tensor for caching.
+
         x: (batch, seq_len, d_model)
-        returns: tuple of (k_latent, v_latent) each (batch, seq_len, latent_dim)
+        returns: c_kv of shape (batch, seq_len, latent_dim)
         """
-        k_latent = self.w_k(x)  # (B, L, latent_dim)
-        v_latent = self.w_v_compress(x)  # (B, L, latent_dim)
-        return k_latent, v_latent
+        return self.w_kv_down(x)
+
+    def _prepare_kv(self, c_kv, batch_size):
+        """
+        Derive K and V tensors from the shared compressed latent.
+
+        c_kv: (batch, seq_len, latent_dim)
+        returns: (k, v) ready for attention
+            k: (batch, 1, seq_len, latent_dim)       — shared across heads
+            v: (batch, num_heads, seq_len, head_dim)  — per-head
+        """
+        # K: use latent directly, broadcast across heads
+        k = tf.expand_dims(c_kv, axis=1)  # (B, 1, L, latent_dim)
+
+        # V: up-project from shared latent to per-head values
+        v_full = self.w_v_up(c_kv)  # (B, L, H*head_dim)
+        v = tf.reshape(v_full, (batch_size, -1, self.num_heads, self.head_dim))
+        v = tf.transpose(v, [0, 2, 1, 3])  # (B, H, L, head_dim)
+
+        return k, v
 
     def call(self, x, mask=None, training=None):
         """
@@ -228,74 +250,48 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
         """
         batch_size = tf.shape(x)[0]
 
-        # ---- Q path: single projection to latent ----    
-        q_latent_all = self.wq(x)  # (B, L, H * latent_dim)
-        q = self.split_heads_latent_query(q_latent_all, batch_size, name='Q_latent') # (B, H, L, latent_dim)
+        # ---- Q path ----
+        q_all = self.wq(x)  # (B, L, H * latent_dim)
+        q = self.split_heads_latent_query(q_all, batch_size, name='Q_latent')  # (B, H, L, latent_dim)
 
-        # ---- K path (compressed, shared across heads) ----
-        k_latent_full = self.w_k(x)  # (B, L, latent_dim)
-        k_latent = tf.expand_dims(k_latent_full, axis=1)  # (B, 1, L, latent_dim)
-
-        # ---- V path (separate compression + reconstruction) ----
-        v_compressed = self.w_v_compress(x)  # (B, L, latent_dim)
-        v_latent_all = self.w_v_reconstruct(v_compressed)  # (B, L, H * head_dim)
-        v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
-        v = tf.transpose(v, [0, 2, 1, 3])  # (B, H, L, head_dim)
-
-        tf.debugging.assert_equal(
-            tf.shape(q)[1:], [self.num_heads, tf.shape(x)[1], self.latent_dim],
-            message="Q shape mismatch"
-        )
-        tf.debugging.assert_equal(
-            tf.shape(k_latent)[1:], [1, tf.shape(x)[1], self.latent_dim],
-            message="K shape mismatch"
-        )
-        tf.debugging.assert_equal(
-            tf.shape(v)[1:], [self.num_heads, tf.shape(x)[1], self.head_dim],
-            message="V shape mismatch"
-        )
+        # ---- Shared KV compression + derive K, V ----
+        c_kv = self.compute_latent_kv(x)  # (B, L, latent_dim)
+        k, v = self._prepare_kv(c_kv, batch_size)
 
         # ---- Attention ----
-        # attn weights shape: (B, H, L_q, L_k)
+        # q: (B, H, L, latent_dim), k: (B, 1, L, latent_dim) -> broadcast over H
+        # attn_weights: (B, H, L_q, L_k), attn: (B, H, L_q, head_dim)
         attn, attn_weights, qk_values = scaled_dot_product_attention(
-            q, k_latent, v,
+            q, k, v,
             mask=mask,
             m_alpha=self.m_alpha,
             mask_format=self.mask_format,
             temperature=self.temperature
         )
 
-        attn = tf.transpose(attn, [0, 2, 1, 3])
-        attn = tf.reshape(attn, (batch_size, -1, self.d_model))
-
+        # ---- Merge heads and project ----
+        attn = tf.transpose(attn, [0, 2, 1, 3])  # (B, L, H, head_dim)
+        attn = tf.reshape(attn, (batch_size, -1, self.d_model))  # (B, L, d_model)
         output = self.out_proj(attn)
-        
-        return output, attn_weights, qk_values, (q, k_latent, v)
+
+        return output, attn_weights, qk_values, (q, k, v)
 
     def attend_with_cached_kv(self, x_q, kv_cache, mask=None):
         """
-        x_q: (batch, 1, d_model)
-        kv_cache: tuple of (k_cache, v_cache), each (batch, seq_len_k, latent_dim)
+        x_q: (batch, 1, d_model)         — single new query token
+        kv_cache: (batch, seq_len_k, latent_dim)  — the shared compressed latent
         """
         batch_size = tf.shape(x_q)[0]
 
-        # Unpack cache
-        k_cache, v_cache = kv_cache
+        # Q from new token
+        q_all = self.wq(x_q)  # (B, 1, H * latent_dim)
+        q = self.split_heads_latent_query(q_all, batch_size)  # (B, H, 1, latent_dim)
 
-        # Query
-        q_latent_all = self.wq(x_q)            # (B, 1, H * latent_dim)
-        q = self.split_heads_latent_query(q_latent_all, batch_size) # (B, H, 1, latent_dim)
-
-        # Cached K (shared across heads)
-        k_latent = tf.expand_dims(k_cache, axis=1)  # (B, 1, L_k, latent_dim)
-        
-        # Cached V (reconstruct from compressed)
-        v_latent_all = self.w_v_reconstruct(v_cache)  # (B, L_k, H * head_dim)
-        v = tf.reshape(v_latent_all, (batch_size, -1, self.num_heads, self.head_dim))
-        v = tf.transpose(v, [0, 2, 1, 3])  # (B, H, L_k, head_dim)
+        # K, V from cached shared latent
+        k, v = self._prepare_kv(kv_cache, batch_size)
 
         attn, attn_weights, qk = scaled_dot_product_attention(
-            q, k_latent, v,
+            q, k, v,
             mask=mask,
             m_alpha=self.m_alpha,
             mask_format=self.mask_format,
@@ -304,9 +300,9 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
 
         attn = tf.transpose(attn, [0, 2, 1, 3])
         attn = tf.reshape(attn, (batch_size, 1, self.d_model))
-
         output = self.out_proj(attn)
-        return output, attn_weights, qk, (q, k_latent, v)
+
+        return output, attn_weights, qk, (q, k, v)
 
     def get_config(self):
         base_config = super().get_config()
@@ -316,6 +312,6 @@ Memory savings: O(L×d_model) → O(L×latent_dim + H×L×latent_dim)
             "latent_dim": self.latent_dim,
             "m_alpha": self.m_alpha,
             "mask_format": self.mask_format,
-            "temperature": self.temperature 
+            "temperature": self.temperature
         }
         return {**base_config, **config}

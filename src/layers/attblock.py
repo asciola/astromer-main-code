@@ -76,7 +76,8 @@ class AttentionBlock(tf.keras.layers.Layer):
                 return ffn_output, att_w, qk_v, (q_t, k_t, v_t), None
             return ffn_output, None
 
-        # Caching path (only traced if use_cache is True)
+        # ---- Caching path (only traced if use_cache is True) ----
+        # Cache is a single tensor: (B, cached_len, latent_dim)
         batch_size = tf.shape(x)[0]
         seq_len = tf.shape(x)[1]
         
@@ -87,17 +88,15 @@ class AttentionBlock(tf.keras.layers.Layer):
         is_training = tf.cast(training, tf.bool)
         can_use_cache = tf.cast(self.use_cache, tf.bool)
 
-        # Normalize kv_cache to a Tensor to avoid Graph/Literal mismatch issues
+        # Normalize kv_cache to a Tensor (single tensor, not a tuple)
+        l_dim = self.latent_dim if self.latent_dim else 1
         if kv_cache is None:
-            l_dim = self.latent_dim if self.latent_dim else 1
-            kvc = (tf.zeros((batch_size, 0, l_dim), dtype=x.dtype), 
-                   tf.zeros((batch_size, 0, l_dim), dtype=x.dtype))  # Tuple of (k_cache, v_cache)
+            kvc = tf.zeros((batch_size, 0, l_dim), dtype=x.dtype)
         else:
             kvc = kv_cache
 
         # Decision variables as Tensors
-        # Check the first element of the tuple (k_cache)
-        has_cache_tensor = tf.greater(tf.shape(kvc[0])[1], 0)
+        has_cache_tensor = tf.greater(tf.shape(kvc)[1], 0)
         
         # Recurrent mode condition
         use_recurrent = tf.logical_and(
@@ -107,40 +106,34 @@ class AttentionBlock(tf.keras.layers.Layer):
 
         def recurrent_path():
             x_q_norm = x_norm1[:, -1:, :]  # Use normalized input
-            x_q_orig = x[:, -1:, :]  # Keep original for residual
             m_q = mask[:, -1:, :] if mask is not None else None
             
             def first_step():
                 m_step = m_q[:, :, :1] if m_q is not None else None
                 out, w, qk, qkv_tuple = self.mha(x_q_norm, mask=m_step, training=False)
-                k_new, v_new = self.mha.compute_latent_kv(x_q_norm)
-                nc = (k_new, v_new)
-                return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
+                # Compute shared latent for cache
+                c_kv_new = self.mha.compute_latent_kv(x_q_norm)  # (B, 1, latent_dim)
+                return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], c_kv_new
 
             def update_step():
                 out, w, qk, qkv_tuple = self.mha.attend_with_cached_kv(x_q_norm, kvc, m_q)
-                k_new, v_new = self.mha.compute_latent_kv(x_q_norm)
-                k_cache, v_cache = kvc
+                # Compute shared latent for new token and append to cache
+                c_kv_new = self.mha.compute_latent_kv(x_q_norm)  # (B, 1, latent_dim)
                 # Cast cached values to match new values dtype for mixed precision
-                k_cache = tf.cast(k_cache, k_new.dtype)
-                v_cache = tf.cast(v_cache, v_new.dtype)
-
-                nc = (tf.concat([k_cache, k_new], axis=1), 
-                      tf.concat([v_cache, v_new], axis=1))
+                kvc_cast = tf.cast(kvc, c_kv_new.dtype)
+                nc = tf.concat([kvc_cast, c_kv_new], axis=1)  # (B, cached_len+1, latent_dim)
                 return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
+
             return tf.cond(has_cache_tensor, update_step, first_step)
 
         def full_sequence_path():
             out, w, qk, qkv_tuple = self.mha(x_norm1, mask=mask, training=training)
             
             def compute_prefill():
-                k_lat, v_lat = self.mha.compute_latent_kv(x_norm1)
-                return (k_lat, v_lat)
+                return self.mha.compute_latent_kv(x_norm1)  # (B, L, latent_dim)
 
             def compute_empty():
-                l_dim = self.latent_dim if self.latent_dim else 1
-                return (tf.zeros((batch_size, 0, l_dim), dtype=x.dtype),
-                        tf.zeros((batch_size, 0, l_dim), dtype=x.dtype))
+                return tf.zeros((batch_size, 0, l_dim), dtype=x.dtype)
                 
             nc = tf.cond(tf.logical_and(can_use_cache, tf.logical_not(is_training)),
                          compute_prefill, compute_empty)
