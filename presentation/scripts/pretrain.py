@@ -21,7 +21,7 @@ import os
 from tensorflow.keras.optimizers import Adam
 from datetime import datetime
 
-from src.training.scheduler import CustomSchedule
+from src.training.scheduler import CustomSchedule, WarmupCosineDecay
 from src.training.utils import train
 
 from presentation.pipelines.steps.model_design import build_model, load_pt_model
@@ -98,6 +98,15 @@ def run(opt):
     if opt.scheduler:
         print('[INFO] Using Custom Scheduler')
         lr = CustomSchedule(d_model=int(opt.head_dim*opt.num_heads))
+    elif opt.cosine_scheduler:
+        print('[INFO] Using Cosine Scheduler')
+        steps_per_epoch = sum(1 for _ in loaders['train'])
+        print(f'[INFO] Steps per epoch: {steps_per_epoch}')
+        warmup_steps = steps_per_epoch * opt.warmup_epochs  # warmup_steps is really warmup epochs
+        total_steps = steps_per_epoch * opt.num_epochs
+        lr = WarmupCosineDecay(base_lr=opt.lr,
+                               warmup_steps=warmup_steps,
+                               total_steps=total_steps)
     else:
         lr = opt.lr
 
@@ -162,6 +171,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_epochs', default=10000, type=int,
                         help='Number of epochs')
     parser.add_argument('--scheduler', action='store_true', help='Use Custom Scheduler during training')
+    parser.add_argument('--cosine-scheduler', action='store_true', help='Use Cosine Scheduler during training')
+    parser.add_argument('--warmup-epochs', default=3, type=int,
+                        help='Number of warmup epochs')
     parser.add_argument('--correct-loss', action='store_true', help='Use error bars to weigh loss')
 
     # ==== MODEL ======================================================
