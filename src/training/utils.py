@@ -115,7 +115,12 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
     es_count = 0
     min_loss = 1e9
     step = 0
-    
+    best_epoch = 0
+    best_tr_rmse = 0.
+    best_tr_rsquare = 0.
+    best_vl_rmse = 0.
+    best_vl_rsquare = 0.
+
     # Store steps per epoch once determined
     steps_per_epoch = None
     
@@ -188,12 +193,20 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         if tf.math.greater(min_loss, vl_rmse):
             min_loss = vl_rmse
             es_count = 0
+            best_epoch = epoch
+            best_tr_rmse = tr_rmse
+            best_tr_rsquare = tr_rsquare
+            best_vl_rmse = vl_rmse
+            best_vl_rsquare = vl_rsquare
+            print('[INFO] New best epoch {} - rmse: {:.3f}/{:.3f} rsquare: {:.3f}/{:.3f}'.format(epoch, tr_rmse, vl_rmse, tr_rsquare, vl_rsquare), flush=True)
             model.save_weights(os.path.join(project_folder, 'out.weights.h5'))
         else:
             es_count = es_count + 1
 
         if es_count == es_patience:
             print('[INFO] Early Stopping Triggered at epoch {:03d}'.format(epoch))
+            print('[INFO] Best epoch: {:03d} - rmse: {:.4f}/{:.4f} rsquare: {:.4f}/{:.4f}'.format(
+                best_epoch, best_tr_rmse, best_vl_rmse, best_tr_rsquare, best_vl_rsquare), flush=True)
             break
         
         pbar.set_description("Epoch {} (p={}) - rmse: {:.3f}/{:.3f} rsquare: {:.3f}/{:.3f}".format(epoch, 
