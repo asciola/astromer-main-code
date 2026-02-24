@@ -83,7 +83,31 @@ class AttentionBlock(tf.keras.layers.Layer):
         
         # PRE-LN: Normalize input before attention
         x_norm1 = self.layernorm1(x, training=training)
-        
+
+        # Training shortcut: skip all tf.cond branching, no cache needed
+        if training:
+            attn_out, att_w, qk_v, (q_t, k_t, v_t) = self.mha(x_norm1, mask=mask, training=training)
+            attn_out = self.dropout1(attn_out, training=training)
+
+            if self.use_leak:
+                x_after_attn = self.reshape_leak_1(x) + attn_out
+            else:
+                x_after_attn = x + attn_out
+
+            ffn_input = self.layernorm2(x_after_attn, training=training)
+            ffn_out = self.ffn(ffn_input)
+            ffn_out = self.dropout2(ffn_out, training=training)
+
+            if self.use_leak:
+                ffn_out = self.reshape_leak_2(x_after_attn) + ffn_out
+            else:
+                ffn_out = x_after_attn + ffn_out
+
+            if return_weights:
+                return ffn_out, att_w, qk_v, (q_t, k_t, v_t), None
+            return ffn_out, None
+
+        # ---- Inference path with caching ----
         # Determine training status as a tensor
         is_training = tf.cast(training, tf.bool)
         can_use_cache = tf.cast(self.use_cache, tf.bool)
@@ -100,7 +124,7 @@ class AttentionBlock(tf.keras.layers.Layer):
         
         # Recurrent mode condition
         use_recurrent = tf.logical_and(
-            tf.logical_and(can_use_cache, tf.logical_not(is_training)),
+            can_use_cache,
             tf.logical_or(tf.equal(seq_len, 1), has_cache_tensor)
         )
 
@@ -127,16 +151,8 @@ class AttentionBlock(tf.keras.layers.Layer):
             return tf.cond(has_cache_tensor, update_step, first_step)
 
         def full_sequence_path():
-            out, w, qk, qkv_tuple = self.mha(x_norm1, mask=mask, training=training)
-            
-            def compute_prefill():
-                return self.mha.compute_latent_kv(x_norm1)  # (B, L, latent_dim)
-
-            def compute_empty():
-                return tf.zeros((batch_size, 0, l_dim), dtype=x.dtype)
-                
-            nc = tf.cond(tf.logical_and(can_use_cache, tf.logical_not(is_training)),
-                         compute_prefill, compute_empty)
+            out, w, qk, qkv_tuple = self.mha(x_norm1, mask=mask, training=False)
+            nc = self.mha.compute_latent_kv(x_norm1)  # (B, L, latent_dim)
             return out, w, qk, qkv_tuple[0], qkv_tuple[1], qkv_tuple[2], nc
 
         # Execute branches
@@ -144,7 +160,7 @@ class AttentionBlock(tf.keras.layers.Layer):
             use_recurrent, recurrent_path, full_sequence_path)
 
         # PRE-LN: Residuals and Post-processing
-        attn_out = self.dropout1(attn_out, training=training)
+        attn_out = self.dropout1(attn_out, training=False)
 
         # Add residual connection after attention
         if self.use_leak:
@@ -154,22 +170,20 @@ class AttentionBlock(tf.keras.layers.Layer):
             x_after_attn = tf.cond(use_recurrent, lambda: x[:, -1:, :] + attn_out, lambda: x + attn_out)
 
         # PRE-LN: Normalize BEFORE FFN
-        ffn_input = self.layernorm2(x_after_attn, training=training)
+        ffn_input = self.layernorm2(x_after_attn, training=False)
         ffn_out = self.ffn(ffn_input)
-        ffn_out = self.dropout2(ffn_out, training=training)
+        ffn_out = self.dropout2(ffn_out, training=False)
 
         # Add residual connection after FFN
         if self.use_leak:
             ffn_out = self.reshape_leak_2(x_after_attn) + ffn_out
         else:
             ffn_out = x_after_attn + ffn_out
-        
-        final_cache_val = n_cache if self.use_cache else None
 
         if return_weights:
-            return ffn_out, att_w, qk_v, (q_t, k_t, v_t), final_cache_val
+            return ffn_out, att_w, qk_v, (q_t, k_t, v_t), n_cache
 
-        return ffn_out, final_cache_val
+        return ffn_out, n_cache
 
     def get_config(self):
         config = super().get_config()
