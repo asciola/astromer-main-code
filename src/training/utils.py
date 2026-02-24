@@ -198,7 +198,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             best_tr_rsquare = tr_rsquare
             best_vl_rmse = vl_rmse
             best_vl_rsquare = vl_rsquare
-            print('[INFO] New best epoch {} - rmse: {:.3f}/{:.3f} rsquare: {:.3f}/{:.3f}'.format(epoch, tr_rmse, vl_rmse, tr_rsquare, vl_rsquare), flush=True)
+            print('[INFO] New best epoch {:03d} - rmse: {:.4f}/{:.4f} rsquare: {:.4f}/{:.4f}'.format(epoch, tr_rmse, vl_rmse, tr_rsquare, vl_rsquare), flush=True)
             model.save_weights(os.path.join(project_folder, 'out.weights.h5'))
         else:
             es_count = es_count + 1
