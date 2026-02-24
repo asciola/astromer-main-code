@@ -101,6 +101,11 @@ def log_system_metrics(writer, step, epoch=None, batch=None):
         if batch is not None:
             tf.summary.scalar('batch', batch, step=step)
 
+def get_sec_per_iteration(pbar):
+    f_dict = pbar.format_dict
+    return f_dict['elapsed'] / f_dict['n']
+    
+
 def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_patience=20, test_data=None, project_folder=''):
     train_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'train'))
     valid_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'validation'))
@@ -190,6 +195,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         tensorboard_log('gradient/min', tr_min_grad, train_writer, step=epoch)
         
         print('[DEBUG] Epoch {} Gradient stats: max={:.4e}, mean={:.4e}, min={:.4e}'.format(epoch, tr_max_grad, tr_mean_grad, tr_min_grad), flush=True)
+        print('[DEBUG] Sec per iteration: {:.4f}'.format(get_sec_per_iteration(pbar)), flush=True)
+        
         if tf.math.greater(min_loss, vl_rmse):
             min_loss = vl_rmse
             es_count = 0
