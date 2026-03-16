@@ -72,8 +72,7 @@ def load_pt_model(pt_path, optimizer=None):
     weights_path = os.path.join(pt_path, 'out.weights.h5')
     if optimizer is not None:
         model.compile(optimizer=optimizer)
-    print('[INFO] Loading weights from {}'.format(weights_path))
-    model.load_weights(weights_path).expect_partial()
+    model.load_weights(weights_path)
     return model, pt_config
 
 
