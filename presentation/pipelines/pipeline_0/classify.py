@@ -22,13 +22,17 @@ def clf_step(opt, mlp_arch='avg_mlp'):
     
     CLFDIR = os.path.join(opt.pt_model, '..', opt.exp_name, ft_model, mlp_arch)
     FTDIR  = os.path.join(opt.pt_model, '..', 'finetuning', ft_model)
+    PTDIR  = os.path.join(opt.pt_model, '..', 'pretraining', ft_model)
     
     print('[INFO] Exp dir: ', CLFDIR)
 
     os.makedirs(CLFDIR, exist_ok=True)
     
     # ========= MODEL ========================================
-    astromer, model_config = load_pt_model(FTDIR)
+    if (opt.use_pretrained):
+        astromer, model_config = load_pt_model(PTDIR)
+    else:
+        astromer, model_config = load_pt_model(FTDIR)
 
     # ========== DATA ========================================
     loaders = build_loader(opt.data, 
@@ -96,6 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', default=0.00001, type=float,
                         help='Finetuning learning rate')
     parser.add_argument('--train-astromer', action='store_true', help='Train Astromer when classifying')
+    parser.add_argument('--use-pretrained', action='store_true', help='Use pretrained model')
 
 
     opt = parser.parse_args()        
