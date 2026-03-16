@@ -64,6 +64,8 @@ def load_pt_model(pt_path, optimizer=None):
     config_file = os.path.join(pt_path, 'config.toml')
     with open(config_file, 'r') as file:
         pt_config = toml.load(file)
+    if pt_config['use_kv_cache'] == False:
+        pt_config['latent_dim'] = None
     model = build_model(pt_config)
     weights_path = os.path.join(pt_path, 'out.weights.h5')
     if optimizer is not None:
