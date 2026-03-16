@@ -19,6 +19,9 @@ def build_model(params, return_weights=False):
 
     if not 'no_msk_token' in params.keys():
         params['no_msk_token'] = False
+
+    if not 'latent_dim' in params.keys():
+        params['latent_dim'] = None
     
     
     if params['arch'] == 'zero':
@@ -64,12 +67,12 @@ def load_pt_model(pt_path, optimizer=None):
     config_file = os.path.join(pt_path, 'config.toml')
     with open(config_file, 'r') as file:
         pt_config = toml.load(file)
-    if pt_config['use_kv_cache'] == False:
-        pt_config['latent_dim'] = None
+
     model = build_model(pt_config)
     weights_path = os.path.join(pt_path, 'out.weights.h5')
     if optimizer is not None:
         model.compile(optimizer=optimizer)
+    print('[INFO] Loading weights from {}'.format(weights_path))
     model.load_weights(weights_path).expect_partial()
     return model, pt_config
 
