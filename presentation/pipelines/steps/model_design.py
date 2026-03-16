@@ -65,7 +65,7 @@ def load_pt_model(pt_path, optimizer=None):
     with open(config_file, 'r') as file:
         pt_config = toml.load(file)
     model = build_model(pt_config)
-    weights_path = os.path.join(pt_path, 'weights')
+    weights_path = os.path.join(pt_path, 'out.weights.h5')
     if optimizer is not None:
         model.compile(optimizer=optimizer)
     model.load_weights(weights_path).expect_partial()
