@@ -126,7 +126,8 @@ def run(opt):
           validation_data=loaders['validation'], 
           num_epochs=2 if opt.debug else opt.num_epochs, 
           es_patience=opt.patience, 
-          project_folder=EXPDIR)
+          project_folder=EXPDIR,
+          resume_from=opt.checkpoint if opt.checkpoint != '-1' else None)
 
 
 if __name__ == '__main__':

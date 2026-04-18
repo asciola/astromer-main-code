@@ -6,6 +6,7 @@ import argparse
 import math
 import toml
 import os
+import pickle
 from tqdm import tqdm
 
 import psutil
@@ -108,15 +109,11 @@ def get_sec_per_iteration(pbar):
     return f_dict['elapsed'] / f_dict['n']
     
 
-def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_patience=20, test_data=None, project_folder=''):
+def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_patience=20, test_data=None, project_folder='', resume_from=None):
     train_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'train'))
     valid_writer = tf.summary.create_file_writer(os.path.join(project_folder, 'tensorboard', 'validation'))
 
     sample_batch = next(iter(train_data))
-
-    pbar  = tqdm(range(num_epochs), total=num_epochs)
-    pbar.set_description("Epoch 0 (p={}) - rmse: -/- rsquare: -/-", refresh=True)
-    pbar.set_postfix(item=0)    
 
     # ========= Training Loop ==================================
     es_count = 0
@@ -130,7 +127,43 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
 
     # Store steps per epoch once determined
     steps_per_epoch = None
-    
+    start_epoch = 0
+    if resume_from is not None:
+        # Try to load latest checkpoint first (for resuming where we left off)
+        latest_opt_path = os.path.join(resume_from, 'latest', 'optimizer_state.pkl')
+        latest_weights_path = os.path.join(resume_from, 'latest', 'out.weights.h5')
+        # Fall back to root-level checkpoint (backward compatibility)
+        root_opt_path = os.path.join(resume_from, 'optimizer_state.pkl')
+        
+        if os.path.exists(latest_opt_path):
+            opt_path = latest_opt_path
+            # Load latest weights (overriding what load_pt_model loaded)
+            if os.path.exists(latest_weights_path):
+                model.load_weights(latest_weights_path)
+                print(f'[INFO] Loaded latest weights from {latest_weights_path}')
+        elif os.path.exists(root_opt_path):
+            opt_path = root_opt_path
+        else:
+            opt_path = None
+            
+        if opt_path is not None:
+            # Run one dummy step to initialize optimizer state
+            dummy_batch = next(iter(train_data))
+            train_step(model, dummy_batch, optimizer)
+            
+            with open(opt_path, 'rb') as f:
+                opt_state = pickle.load(f)
+            optimizer.set_weights(opt_state['weights'])
+            start_epoch = opt_state['epoch'] + 1
+            step = opt_state['step']
+            min_loss = opt_state['min_loss']
+            es_count = opt_state.get('es_count', 0)
+            print(f'[INFO] Restored optimizer state from epoch {opt_state["epoch"]} (es_count={es_count}, min_loss={min_loss:.4f})')
+
+    pbar = tqdm(range(start_epoch, num_epochs), total=num_epochs, initial=start_epoch)
+    pbar.set_description("Epoch 0 (p={}) - rmse: -/- rsquare: -/-", refresh=True)
+    pbar.set_postfix(item=0)    
+
     for epoch in pbar:
         pbar.set_postfix(item1=epoch)
         epoch_tr_rmse    = []
@@ -208,7 +241,11 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             best_vl_rmse = vl_rmse
             best_vl_rsquare = vl_rsquare
             print('[INFO] New best epoch {:03d} - rmse: {:.4f}/{:.4f} rsquare: {:.4f}/{:.4f}'.format(epoch, tr_rmse, vl_rmse, tr_rsquare, vl_rsquare), flush=True)
+            # Save best weights (root level for backward compat + best/ subdirectory)
             model.save_weights(os.path.join(project_folder, 'out.weights.h5'))
+            best_dir = os.path.join(project_folder, 'best')
+            os.makedirs(best_dir, exist_ok=True)
+            model.save_weights(os.path.join(best_dir, 'out.weights.h5'))
         else:
             es_count = es_count + 1
 
@@ -217,6 +254,20 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             print('[INFO] Best epoch: {:03d} - rmse: {:.4f}/{:.4f} rsquare: {:.4f}/{:.4f}'.format(
                 best_epoch, best_tr_rmse, best_vl_rmse, best_tr_rsquare, best_vl_rsquare), flush=True)
             break
+
+        # Always save latest checkpoint for resuming
+        latest_dir = os.path.join(project_folder, 'latest')
+        os.makedirs(latest_dir, exist_ok=True)
+        model.save_weights(os.path.join(latest_dir, 'out.weights.h5'))
+        opt_state = {
+            'weights': optimizer.get_weights(),
+            'epoch': epoch,
+            'step': step,
+            'min_loss': float(min_loss),
+            'es_count': es_count,
+        }
+        with open(os.path.join(latest_dir, 'optimizer_state.pkl'), 'wb') as f:
+            pickle.dump(opt_state, f)
         
         pbar.set_description("Epoch {} (p={}) - rmse: {:.3f}/{:.3f} rsquare: {:.3f}/{:.3f}".format(epoch, 
                                                                                             es_count,
