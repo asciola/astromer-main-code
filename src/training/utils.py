@@ -115,6 +115,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
 
     sample_batch = next(iter(train_data))
 
+
+
     # ========= Training Loop ==================================
     es_count = 0
     min_loss = 1e9
@@ -153,7 +155,9 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             
             with open(opt_path, 'rb') as f:
                 opt_state = pickle.load(f)
-            optimizer.set_weights(opt_state['weights'])
+            # Restore optimizer variables (TF 2.11+ API)
+            for var, val in zip(optimizer.variables, opt_state['weights']):
+                var.assign(val)
             start_epoch = opt_state['epoch'] + 1
             step = opt_state['step']
             min_loss = opt_state['min_loss']
@@ -260,7 +264,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         os.makedirs(latest_dir, exist_ok=True)
         model.save_weights(os.path.join(latest_dir, 'out.weights.h5'))
         opt_state = {
-            'weights': optimizer.get_weights(),
+            'weights': [v.numpy() for v in optimizer.variables],
             'epoch': epoch,
             'step': step,
             'min_loss': float(min_loss),
