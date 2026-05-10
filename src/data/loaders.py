@@ -141,6 +141,159 @@ def load_numpy(samples,
                                                         'length':()})
     return dataset
 
+
+def _iter_tar_samples(tar_paths):
+    """
+    Iterate over light-curve samples stored in WebDataset-style .tar.gz shards.
+
+    Each sample in a shard consists of files sharing a common key prefix:
+        <key>.ID.txt
+        <key>.time_0.pth
+        <key>.brightness_0.pth
+        <key>.brightness_err_0.pth
+        [<key>.label.cls]   # only present for classification data
+
+    Yields dicts compatible with the existing TF pipeline:
+        {'input': (N, 3) float32 array,  # columns: [time, brightness, brightness_err]
+         'label': int,
+         'lcid': str,
+         'length': int}
+
+    Args:
+        tar_paths (list[str]): list of .tar.gz shard paths.
+
+    Yields:
+        dict: one sample at a time.
+    """
+    import tarfile
+    import io
+    import torch  # local import so TF-only environments aren't forced to load torch
+
+    for tar_path in tar_paths:
+        with tarfile.open(tar_path, 'r:gz') as tar:
+            current_key = None
+            buffer = {}
+
+            def flush(buf, key):
+                """Assemble a sample dict from a buffer of {ext: bytes}."""
+                if not buf or key is None:
+                    return None
+                # Required components
+                try:
+                    time_bytes = buf['time_0.pth']
+                    bright_bytes = buf['brightness_0.pth']
+                    err_bytes = buf['brightness_err_0.pth']
+                except KeyError:
+                    # Incomplete sample (e.g. partial shard); skip silently
+                    return None
+
+                time_t = torch.load(io.BytesIO(time_bytes), map_location='cpu', weights_only=False)
+                bright_t = torch.load(io.BytesIO(bright_bytes), map_location='cpu', weights_only=False)
+                err_t = torch.load(io.BytesIO(err_bytes), map_location='cpu', weights_only=False)
+
+                time_np = time_t.numpy().astype(np.float32)
+                bright_np = bright_t.numpy().astype(np.float32)
+                err_np = err_t.numpy().astype(np.float32)
+
+                # Defensive length alignment
+                n = min(time_np.shape[0], bright_np.shape[0], err_np.shape[0])
+                arr = np.stack([time_np[:n], bright_np[:n], err_np[:n]], axis=-1)
+
+                # ID
+                if 'ID.txt' in buf:
+                    lcid = buf['ID.txt'].decode('utf-8').strip()
+                else:
+                    lcid = key
+
+                # Label (only present for classification shards)
+                if 'label.cls' in buf:
+                    label = int(buf['label.cls'].decode('utf-8').strip())
+                else:
+                    label = 0  # placeholder; ignored when num_cls is None
+
+                return {
+                    'input': arr,
+                    'label': label,
+                    'lcid': lcid,
+                    'length': int(n),
+                }
+
+            for member in tar:
+                if not member.isfile():
+                    continue
+                name = member.name
+                if '.' not in name:
+                    continue
+                key, ext = name.split('.', 1)
+
+                if current_key is None:
+                    current_key = key
+
+                if key != current_key:
+                    sample = flush(buffer, current_key)
+                    if sample is not None:
+                        yield sample
+                    buffer = {}
+                    current_key = key
+
+                f = tar.extractfile(member)
+                if f is not None:
+                    buffer[ext] = f.read()
+
+            # Flush the last sample in the shard
+            sample = flush(buffer, current_key)
+            if sample is not None:
+                yield sample
+
+
+def load_tar_shards(shard_dir_or_paths):
+    """
+    Build a tf.data.Dataset that streams light curves from .tar.gz shards.
+
+    Args:
+        shard_dir_or_paths: either a directory containing 'lightcurves-*.tar.gz'
+            shards, or an explicit list of .tar.gz paths.
+
+    Returns:
+        tf.data.Dataset yielding {'input', 'label', 'lcid', 'length'} dicts,
+        matching the schema produced by load_numpy / load_records.
+    """
+    if isinstance(shard_dir_or_paths, str):
+        tar_paths = sorted(glob.glob(os.path.join(shard_dir_or_paths, '*.tar.gz')))
+        if not tar_paths:
+            # Allow one level of nesting (e.g. .../train/fold_0/*.tar.gz)
+            tar_paths = sorted(glob.glob(os.path.join(shard_dir_or_paths, '*', '*.tar.gz')))
+        if not tar_paths:
+            raise FileNotFoundError(
+                '[ERROR] No .tar.gz shards found under {}'.format(shard_dir_or_paths))
+    else:
+        tar_paths = list(shard_dir_or_paths)
+
+    print('[INFO] Found {} tar.gz shard(s)'.format(len(tar_paths)))
+
+    dataset = tf.data.Dataset.from_generator(
+        lambda: _iter_tar_samples(tar_paths),
+        output_signature={
+            'input':  tf.TensorSpec(shape=(None, 3), dtype=tf.float32),
+            'label':  tf.TensorSpec(shape=(),        dtype=tf.int32),
+            'lcid':   tf.TensorSpec(shape=(),        dtype=tf.string),
+            'length': tf.TensorSpec(shape=(),        dtype=tf.int32),
+        },
+    )
+    return dataset
+
+
+def _is_tar_dir(path):
+    """Return True if `path` is a directory containing .tar.gz shards."""
+    if not isinstance(path, str) or not os.path.isdir(path):
+        return False
+    if glob.glob(os.path.join(path, '*.tar.gz')):
+        return True
+    if glob.glob(os.path.join(path, '*', '*.tar.gz')):
+        return True
+    return False
+
+
 def format_inp_astromer(batch, 
                         num_cls=None, 
                         nsp_test=False,
@@ -220,10 +373,19 @@ def get_loader(dataset,
     
 
     if isinstance(dataset, list):
-        dataset = load_records_v2(dataset)
+        # Check if list contains tar.gz files
+        if dataset and isinstance(dataset[0], str) and dataset[0].endswith('.tar.gz'):
+            print('[INFO] Loading from .tar.gz shards (list)')
+            dataset = load_tar_shards(dataset)
+        else:
+            dataset = load_records_v2(dataset)
 
     if isinstance(dataset, str):
-        dataset = load_records(records_dir=dataset)
+        if _is_tar_dir(dataset):
+            print('[INFO] Loading from .tar.gz shards in {}'.format(dataset))
+            dataset = load_tar_shards(dataset)
+        else:
+            dataset = load_records(records_dir=dataset)
     
     if shuffle:
         SHUFFLE_BUFFER = 10000
