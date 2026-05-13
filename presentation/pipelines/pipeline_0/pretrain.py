@@ -1,3 +1,4 @@
+import torch
 import tensorflow as tf
 
 # Configure GPU memory growth (first)
