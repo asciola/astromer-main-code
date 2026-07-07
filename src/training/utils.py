@@ -1,6 +1,7 @@
 '''
 DISTRIBUTED TRAINING
 '''
+import shutil
 import tensorflow as tf
 import argparse
 import math
@@ -131,6 +132,15 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
     steps_per_epoch = None
     start_epoch = 0
     if resume_from is not None:
+        # Copy previous weights to new folder (for resuming where we left off)
+        for rel in ['out.weights.h5', os.path.join('best', 'out.weights.h5')]:
+            src = os.path.join(resume_from, rel)
+            dst = os.path.join(project_folder, rel)
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                print(f'[INFO] Carried forward best checkpoint: {rel}')
+        
         # Try to load latest checkpoint first (for resuming where we left off)
         latest_opt_path = os.path.join(resume_from, 'latest', 'optimizer_state.pkl')
         latest_weights_path = os.path.join(resume_from, 'latest', 'out.weights.h5')
@@ -149,9 +159,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             opt_path = None
             
         if opt_path is not None:
-            # Run one dummy step to initialize optimizer state
-            dummy_batch = next(iter(train_data))
-            train_step(model, dummy_batch, optimizer)
+            # Materialize optimizer slot variables without applying a gradient step
+            optimizer.build(model.trainable_variables)
             
             with open(opt_path, 'rb') as f:
                 opt_state = pickle.load(f)
@@ -162,6 +171,11 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             step = opt_state['step']
             min_loss = opt_state['min_loss']
             es_count = opt_state.get('es_count', 0)
+            best_epoch = opt_state.get('best_epoch', 0)
+            best_tr_rmse = opt_state.get('best_tr_rmse', 0.)
+            best_tr_rsquare = opt_state.get('best_tr_rsquare', 0.)
+            best_vl_rmse = opt_state.get('best_vl_rmse', 0.)
+            best_vl_rsquare = opt_state.get('best_vl_rsquare', 0.)
             print(f'[INFO] Restored optimizer state from epoch {opt_state["epoch"]} (es_count={es_count}, min_loss={min_loss:.4f})')
 
     pbar = tqdm(range(start_epoch, num_epochs), total=num_epochs, initial=start_epoch)
@@ -246,10 +260,12 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             best_vl_rsquare = vl_rsquare
             print('[INFO] New best epoch {:03d} - rmse: {:.4f}/{:.4f} rsquare: {:.4f}/{:.4f}'.format(epoch, tr_rmse, vl_rmse, tr_rsquare, vl_rsquare), flush=True)
             # Save best weights (root level for backward compat + best/ subdirectory)
-            model.save_weights(os.path.join(project_folder, 'out.weights.h5'))
+            model.save_weights(os.path.join(project_folder, 'out.weights.tmp.h5'))
+            os.replace(os.path.join(project_folder, 'out.weights.tmp.h5'), os.path.join(project_folder, 'out.weights.h5'))
             best_dir = os.path.join(project_folder, 'best')
             os.makedirs(best_dir, exist_ok=True)
-            model.save_weights(os.path.join(best_dir, 'out.weights.h5'))
+            model.save_weights(os.path.join(best_dir, 'out.weights.tmp.h5'))
+            os.replace(os.path.join(best_dir, 'out.weights.tmp.h5'), os.path.join(best_dir, 'out.weights.h5'))
         else:
             es_count = es_count + 1
 
@@ -262,16 +278,24 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         # Always save latest checkpoint for resuming
         latest_dir = os.path.join(project_folder, 'latest')
         os.makedirs(latest_dir, exist_ok=True)
-        model.save_weights(os.path.join(latest_dir, 'out.weights.h5'))
+        model.save_weights(os.path.join(latest_dir, 'out.weights.tmp.h5'))
+        os.replace(os.path.join(latest_dir, 'out.weights.tmp.h5'), os.path.join(latest_dir, 'out.weights.h5'))
         opt_state = {
             'weights': [v.numpy() for v in optimizer.variables],
-            'epoch': epoch,
-            'step': step,
+            'epoch': int(epoch),
+            'step': int(step),
             'min_loss': float(min_loss),
-            'es_count': es_count,
+            'es_count': int(es_count),
+            'best_epoch': int(best_epoch),
+            'best_tr_rmse': float(best_tr_rmse),
+            'best_tr_rsquare': float(best_tr_rsquare),
+            'best_vl_rmse': float(best_vl_rmse),
+            'best_vl_rsquare': float(best_vl_rsquare),
         }
-        with open(os.path.join(latest_dir, 'optimizer_state.pkl'), 'wb') as f:
+        tmp = os.path.join(latest_dir, 'optimizer_state.pkl.tmp')
+        with open(tmp, 'wb') as f:
             pickle.dump(opt_state, f)
+        os.replace(tmp, os.path.join(latest_dir, 'optimizer_state.pkl'))
         
         pbar.set_description("Epoch {} (p={}) - rmse: {:.3f}/{:.3f} rsquare: {:.3f}/{:.3f}".format(epoch, 
                                                                                             es_count,
