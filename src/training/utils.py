@@ -260,12 +260,12 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             best_vl_rsquare = vl_rsquare
             print('[INFO] New best epoch {:03d} - rmse: {:.4f}/{:.4f} rsquare: {:.4f}/{:.4f}'.format(epoch, tr_rmse, vl_rmse, tr_rsquare, vl_rsquare), flush=True)
             # Save best weights (root level for backward compat + best/ subdirectory)
-            model.save_weights(os.path.join(project_folder, 'out.weights.tmp.h5'))
-            os.replace(os.path.join(project_folder, 'out.weights.tmp.h5'), os.path.join(project_folder, 'out.weights.h5'))
+            model.save_weights(os.path.join(project_folder, 'out.tmp.weights.h5'))
+            os.replace(os.path.join(project_folder, 'out.tmp.weights.h5'), os.path.join(project_folder, 'out.weights.h5'))
             best_dir = os.path.join(project_folder, 'best')
             os.makedirs(best_dir, exist_ok=True)
-            model.save_weights(os.path.join(best_dir, 'out.weights.tmp.h5'))
-            os.replace(os.path.join(best_dir, 'out.weights.tmp.h5'), os.path.join(best_dir, 'out.weights.h5'))
+            model.save_weights(os.path.join(best_dir, 'out.tmp.weights.h5'))
+            os.replace(os.path.join(best_dir, 'out.tmp.weights.h5'), os.path.join(best_dir, 'out.weights.h5'))
         else:
             es_count = es_count + 1
 
@@ -278,8 +278,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         # Always save latest checkpoint for resuming
         latest_dir = os.path.join(project_folder, 'latest')
         os.makedirs(latest_dir, exist_ok=True)
-        model.save_weights(os.path.join(latest_dir, 'out.weights.tmp.h5'))
-        os.replace(os.path.join(latest_dir, 'out.weights.tmp.h5'), os.path.join(latest_dir, 'out.weights.h5'))
+        model.save_weights(os.path.join(latest_dir, 'out.tmp.weights.h5'))
+        os.replace(os.path.join(latest_dir, 'out.tmp.weights.h5'), os.path.join(latest_dir, 'out.weights.h5'))
         opt_state = {
             'weights': [v.numpy() for v in optimizer.variables],
             'epoch': int(epoch),
