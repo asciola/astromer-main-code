@@ -33,7 +33,8 @@ from pathlib import Path
 
 import numpy as np
 
-ID_CANDIDATES = ("lcid", "ID", "id", "objectid", "newID", "source", "oid")
+ID_CANDIDATES = ("source_id", "lcid", "ID", "id", "objectid", "newID", "source",
+                 "oid", "obj_id", "sourceid")
 MODEL_CANDIDATES = ("model", "exp_name", "exp", "embedding", "emb", "name", "run")
 
 
@@ -54,11 +55,59 @@ def pick(cols: list[str], candidates) -> str | None:
     return None
 
 
-def collect(path: Path, target: str, tag: str) -> tuple[dict[str, np.ndarray], np.ndarray, list[str]]:
-    """-> ({model_name: predictions}, truth, ids). Both layouts handled."""
+def detect_columns(rows: list[dict], cols: list[str], id_override: str | None,
+                   model_override: str | None) -> tuple[str | None, str | None]:
+    """Find the source-id and model columns by TESTING them, not by trusting names.
+
+    Naming varies between runs, and guessing wrong is silently catastrophic: a wrong id
+    column collapses every row onto one key, which yields 1 "source", zero variance and
+    R2 = -inf. So a candidate id column has to actually behave like one -- unique within a
+    model group, and the same value set across groups.
+    """
+    if id_override and id_override not in cols:
+        raise SystemExit(f"--id-column '{id_override}' not in {cols}")
+    if model_override and model_override not in cols:
+        raise SystemExit(f"--model-column '{model_override}' not in {cols}")
+
+    mdc = model_override or pick(cols, MODEL_CANDIDATES)
+    if mdc is None:
+        # a column with few distinct values, each repeated many times, looks like a model key
+        for c in cols:
+            vals = [r[c] for r in rows]
+            u = set(vals)
+            if 1 < len(u) <= max(4, len(rows) // 20) and len(vals) % len(u) == 0:
+                mdc = c
+                break
+
+    groups = {}
+    for r in rows:
+        groups.setdefault(r[mdc] if mdc else "_all", []).append(r)
+    big = max(groups.values(), key=len)
+
+    def behaves_like_id(c: str) -> bool:
+        v = [r[c] for r in big]
+        if len(set(v)) != len(v):
+            return False                      # repeats inside one model group
+        sets = [{r[c] for r in g} for g in groups.values() if len(g) == len(big)]
+        return all(x == sets[0] for x in sets)  # same sources for every model
+
+    if id_override:
+        if not behaves_like_id(id_override):
+            raise SystemExit(f"--id-column '{id_override}' is not unique within a model group")
+        return id_override, mdc
+
+    named = pick(cols, ID_CANDIDATES)
+    if named and behaves_like_id(named):
+        return named, mdc
+    for c in cols:                            # any column that passes the test
+        if c != mdc and behaves_like_id(c):
+            return c, mdc
+    return None, mdc                          # caller falls back to row order
+
+
+def collect(path: Path, target: str, tag: str, args) -> tuple[dict[str, np.ndarray], np.ndarray, list[str]]:
+    """-> ({model_name: predictions}, truth, ids). Long and wide layouts handled."""
     rows, cols = read_csv(path)
-    idc = pick(cols, ID_CANDIDATES)
-    mdc = pick(cols, MODEL_CANDIDATES)
     tcol = next((c for c in cols if c.lower() == f"{target}_true".lower()), None)
     pcol = next((c for c in cols if c.lower() == f"{target}_pred".lower()), None)
 
@@ -68,27 +117,48 @@ def collect(path: Path, target: str, tag: str) -> tuple[dict[str, np.ndarray], n
         except (TypeError, ValueError):
             return np.nan
 
-    if tcol and pcol and mdc:                      # long: one row per source x model
-        by = {}
-        truth = {}
+    if tcol and pcol:
+        idc, mdc = detect_columns(rows, cols, args.id_column, args.model_column)
+        print(f"  columns: id={idc or '(row order)'}  model={mdc or '(single)'}  "
+              f"truth={tcol}  pred={pcol}")
+        if idc is None:
+            # positional fallback: every model must list the same sources in the same order
+            groups = {}
+            for r in rows:
+                groups.setdefault(r[mdc] if mdc else "_all", []).append(r)
+            sizes = {len(g) for g in groups.values()}
+            if len(sizes) != 1:
+                raise SystemExit(
+                    f"{path}: no usable id column, and the {len(groups)} model groups have "
+                    f"different row counts {sorted(sizes)} -- cannot align them by position.\n"
+                    f"  columns seen: {cols}\n  pass --id-column <name>.")
+            n = sizes.pop()
+            print(f"  !! no id column found; aligning {len(groups)} model(s) by row order "
+                  f"({n} rows each). Pass --id-column if that is wrong.")
+            ids = [str(i) for i in range(n)]
+            first = next(iter(groups.values()))
+            y = np.array([f(r[tcol]) for r in first])
+            out = {(f"{tag}:{k}" if tag else k): np.array([f(r[pcol]) for r in g])
+                   for k, g in groups.items()}
+            return out, y, ids
+
+        by, truth = {}, {}
         for r in rows:
-            key = r[mdc]
-            sid = r[idc] if idc else None
-            by.setdefault(key, {})[sid] = f(r[pcol])
+            sid = r[idc]
+            by.setdefault(r[mdc] if mdc else "_all", {})[sid] = f(r[pcol])
             truth[sid] = f(r[tcol])
         ids = sorted(truth)
+        if len(ids) < 10:
+            raise SystemExit(
+                f"{path}: only {len(ids)} distinct source id(s) in column '{idc}' -- that is "
+                f"not a per-source table.\n  columns seen: {cols}\n"
+                f"  pass --id-column <name> naming the source identifier.")
         y = np.array([truth[i] for i in ids])
         out = {}
         for k, d in by.items():
             if len(d) >= 0.5 * len(ids):
                 out[f"{tag}:{k}" if tag else k] = np.array([d.get(i, np.nan) for i in ids])
         return out, y, ids
-
-    if tcol and pcol:                              # long with a single model
-        ids = [r[idc] if idc else str(i) for i, r in enumerate(rows)]
-        y = np.array([f(r[tcol]) for r in rows])
-        return {f"{tag}:{path.parent.name}" if tag else path.parent.name:
-                np.array([f(r[pcol]) for r in rows])}, y, ids
 
     # wide: <something>_<target>_pred  +  one <target>_true
     truth_col = next((c for c in cols if c.lower().endswith(f"{target}_true".lower())), None)
@@ -98,6 +168,7 @@ def collect(path: Path, target: str, tag: str) -> tuple[dict[str, np.ndarray], n
             f"{path}: could not find '{target}_true'/'{target}_pred' columns.\n"
             f"  columns seen: {cols[:14]}{' ...' if len(cols) > 14 else ''}\n"
             f"  pass a different --target, or tell me the column names.")
+    idc = args.id_column or pick(cols, ID_CANDIDATES)
     ids = [r[idc] if idc else str(i) for i, r in enumerate(rows)]
     y = np.array([f(r[truth_col]) for r in rows])
     out = {}
@@ -108,8 +179,10 @@ def collect(path: Path, target: str, tag: str) -> tuple[dict[str, np.ndarray], n
 
 
 def r2(y: np.ndarray, p: np.ndarray) -> float:
-    ss = np.sum((y - p) ** 2)
-    return 1.0 - ss / np.sum((y - y.mean()) ** 2)
+    denom = float(np.sum((y - y.mean()) ** 2))
+    if denom == 0:                    # constant truth -> R2 undefined, not -inf
+        return float("nan")
+    return 1.0 - float(np.sum((y - p) ** 2)) / denom
 
 
 def stack_cv(y: np.ndarray, a: np.ndarray, b: np.ndarray, folds: int = 5,
@@ -139,7 +212,12 @@ def main() -> int:
     ap.add_argument("--control-match", default="control",
                     help="substring identifying the control model (default 'control')")
     ap.add_argument("--folds", type=int, default=5)
-    ap.add_argument("--top", type=int, default=6, help="max pairs to print")
+    ap.add_argument("--top", type=int, default=8, help="max pairs to print")
+    ap.add_argument("--id-column", default=None,
+                    help="source identifier column, if auto-detection picks wrong")
+    ap.add_argument("--model-column", default=None, help="model/experiment name column")
+    ap.add_argument("--list-models", action="store_true",
+                    help="just list the models found, with their R2, and stop")
     args = ap.parse_args()
 
     labels = args.label or [""] * len(args.predictions)
@@ -149,7 +227,7 @@ def main() -> int:
     preds: dict[str, np.ndarray] = {}
     y = None
     for p, tag in zip(args.predictions, labels):
-        d, yy, ids = collect(p, args.target, tag)
+        d, yy, ids = collect(p, args.target, tag, args)
         print(f"{p}: {len(d)} model(s), {len(yy):,} sources")
         if y is None:
             y, n = yy, len(yy)
@@ -170,12 +248,22 @@ def main() -> int:
 
     scores = {k: r2(y, v) for k, v in preds.items()}
     ctrl = [k for k in preds if args.control_match.lower() in k.lower()]
-    if not ctrl:
-        print(f"\nno model matching --control-match '{args.control_match}'. Models seen:")
-        for k in list(preds)[:20]:
-            print(f"   {k}   R2={scores[k]:+.3f}")
-        print("\nfalling back to --pairs all")
-        args.pairs = "all"
+    if args.list_models:
+        print(f"\n{len(preds)} model(s) in this file:")
+        for k in sorted(preds, key=lambda k: -(scores[k] if np.isfinite(scores[k]) else -9)):
+            print(f"   {scores[k]:+.3f}  {k}")
+        return 0
+    if not ctrl and args.pairs != "all":
+        print(f"\nNo model matching --control-match '{args.control_match}'. "
+              f"{len(preds)} model(s) found, best first:")
+        for k in sorted(preds, key=lambda k: -(scores[k] if np.isfinite(scores[k]) else -9))[:12]:
+            print(f"   {scores[k]:+.3f}  {k}")
+        print("\nThe key comparison needs the CONTROL's out-of-fold predictions in this file.")
+        print("If fit_regressor.py does not write them, they have to be added before the")
+        print("embeddings-vs-statistics question can be answered from predictions.csv.")
+        print("Otherwise: --control-match <substring>, or --pairs all to compare models to")
+        print("each other (n(n-1)/2 pairs -- use --top).")
+        return 2
     control = ctrl[0] if ctrl else None
     if control:
         print(f"control: {control}   R2={scores[control]:+.3f}")
