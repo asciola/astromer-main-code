@@ -293,7 +293,7 @@ def main() -> int:
         gain = st - max(ra, rb)
         print(f"{a[:33]:<34}{ra:>+7.3f}{rb:>+7.3f}{r_pp:>10.3f}"
               f"{r_rp:>12.3f}{st:>+10.3f}{gain:>+7.3f}")
-        verdicts.append((a, b, r_pp, gain))
+        verdicts.append((a, b, r_pp, gain, r_rp))
     if len(pairs) > args.top:
         print(f"... ({len(pairs) - args.top} more pairs; raise --top)")
 
@@ -310,11 +310,30 @@ def main() -> int:
     if verdicts:
         g = max(v[3] for v in verdicts)
         rr = min(v[2] for v in verdicts)
+        # The residual correlation is the principled discriminator, not r(pA,pB): if B
+        # explains none of what A gets wrong, there is nothing to combine regardless of
+        # how alike the two prediction vectors happen to look.
+        rres = max(abs(v[4]) for v in verdicts)
         print()
         # Correlation is decided FIRST. Two noisy estimates of the SAME signal still gain
         # from being averaged -- that is variance reduction, not extra information -- so a
         # positive stack gain at r>0.9 must not be read as complementarity.
-        if rr > 0.9:
+        rA = scores[verdicts[0][0]]
+        rB = scores[verdicts[0][1]]
+        if rA <= 0.01 or (rB > 0.02 and rA < 0.25 * rB):
+            print(f"  -> VERDICT: no signal in A. R2 {rA:+.3f} against {rB:+.3f} for B means the")
+            print("     first model predicts this target no better than the sample mean, so this")
+            print("     is not a question about complementarity: there is nothing in A to combine.")
+            print(f"     A low r(pA,pB) here ({rr:.2f}) reflects A predicting noise, not A seeing")
+            print("     something different. The stack never beating B alone confirms it.")
+        elif rres < 0.15 and g <= 0.015:
+            print(f"  -> VERDICT: redundant. B explains essentially none of A's residual "
+                  f"(|r| <= {rres:.2f}) and")
+            print(f"     stacking gains {g:+.3f}, so there is nothing to combine. Note this does")
+            print("     NOT mean the two are equally good: where R2 A > R2 B, A is a better")
+            print("     estimator of the SAME quantity, and its margin is not a dimensionality")
+            print("     artifact -- the stack cannot improve on it.")
+        elif rr > 0.9:
             print(f"  -> VERDICT: redundant. Predictions correlate at r={rr:.2f}: both feature")
             print("     sets are measuring one thing.")
             if g > 0.015:
