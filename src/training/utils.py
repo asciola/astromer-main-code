@@ -88,8 +88,6 @@ def distributed_test_step(model, batch, strategy):
     return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
                             axis=None)
 
-# Initialize NVML for GPU monitoring
-
 def log_system_metrics(writer, step, epoch=None, batch=None):
     """Logs CPU, RAM, GPU memory, and GPU utilization to TensorBoard."""
     cpu_percent = psutil.cpu_percent()
