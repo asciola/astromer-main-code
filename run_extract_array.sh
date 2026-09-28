@@ -25,7 +25,7 @@
 #
 # Edit the partition / time / memory / environment lines for your cluster.
 #SBATCH --job-name=agn_emb
-#SBATCH --partition=gpu
+#SBATCH --partition=seas_gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
@@ -36,7 +36,7 @@
 set -euo pipefail
 
 MODELS=${MODELS:-models.txt}
-DATA=${DATA:-data/records/agn_test/fold_0}
+DATA=${DATA:-/n/holylabs/protopapas_lab/Lab/asciola/data/agn_test/fold_0}
 OUTDIR=${OUTDIR:-emb_agn}
 POOL=${POOL:-last}
 BS=${BS:-128}
@@ -46,6 +46,11 @@ TASK=${SLURM_ARRAY_TASK_ID:?"submit with sbatch --array=... (or set SLURM_ARRAY_
 # module load python/3.10 cuda/12.2 cudnn
 # source activate astromer
 # ----------------------------------------------------------------------------
+
+module purge
+source ~/anaconda3/etc/profile.d/conda.sh
+conda activate astromer
+export PYTHONUNBUFFERED=1
 
 mkdir -p "$OUTDIR" logs
 
