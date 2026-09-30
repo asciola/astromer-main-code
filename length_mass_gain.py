@@ -15,6 +15,20 @@ the no-bottleneck model at window 200) inside each bin. Writes:
   gain_vs_length_mass_<t>.png  (4) the same comparison split by true-mass tercile, one
                                panel per --focus model, one line per tercile.
   gain_length_mass_map_<t>.png (5) length x mass grid for each --focus model.
+  gain_vs_length_mass_excess_<t>.png
+                               (4b) figure 4 divided by what a UNIFORM improvement would
+                               give in each tercile (see NULL below): 1 = no mass effect.
+  prediction_shift_<t>.png     how far each --focus model's mean prediction moves from the
+                               base's, and each model's mean residual, per length bin.
+
+NULL (why figure 4 alone misleads)
+  Splitting by TRUE mass rewards any model that shrinks less toward the mean: the base
+  predicts nearly the average mass, which is almost right for the middle tercile, so a
+  model that is better overall looks worse there and better at both ends even if its
+  gain has nothing to do with mass. For each length bin the script simulates that case
+  using the bin's real masses and the two models' real R^2 values, and figure 4b shows
+  observed / expected. A mean shift of the predictions with length (figure 6) is the
+  other thing that can make the high and low terciles move in opposite directions.
 
 WHY TWO METRICS
   R^2 ratio   what was asked for. Within a LENGTH bin the target keeps its full spread,
@@ -97,7 +111,11 @@ def stats_with_ci(y, p_m, p_b, B, rng, lo_q, hi_q):
     r2b = 1 - eb.mean() / var if var > 0 else np.nan
     out = {"n": n, "r2": r2m, "r2_base": r2b, "mse": em.mean(), "mse_base": eb.mean(),
            "r2_ratio": r2m / r2b if r2b > 0 else np.nan,
-           "mse_ratio": eb.mean() / em.mean()}
+           "mse_ratio": eb.mean() / em.mean(),
+           # mean residuals, and how far the model's predictions sit from the base's
+           "bias": float((p_m - y).mean()), "bias_base": float((p_b - y).mean()),
+           "shift": float((p_m - p_b).mean()),
+           "shift_se": float((p_m - p_b).std(ddof=1) / np.sqrt(n)) if n > 1 else np.nan}
     if B > 0 and n >= 20:
         W = weights(n, B, rng)
         sw = W.sum(1)
@@ -112,6 +130,32 @@ def stats_with_ci(y, p_m, p_b, B, rng, lo_q, hi_q):
                    mse_ratio_lo=np.percentile(mr, lo_q), mse_ratio_hi=np.percentile(mr, hi_q),
                    r2_ratio_unstable=float(np.mean(~(r2b_b > 0))))
     return out
+
+
+def null_tercile_ratios(y, labels, n_groups, r2_base, r2_model, rng, draws=20):
+    """Expected MSE(base)/MSE(model) per mass group if the model were UNIFORMLY better.
+
+    Both predictors are least-squares fits to a synthetic feature that carries a fixed
+    fraction of the variance of the real y values in this bin (R^2 = r2_base for the
+    base, r2_model for the model) and nothing else: no dependence on mass or length.
+    Splitting such predictions by true mass still gives the middle group a ratio below 1
+    and the outer groups above 1; that is the pattern to subtract.
+    """
+    if not (r2_base > 0 and r2_model > 0) or len(y) < 50:
+        return np.full(n_groups, np.nan)
+    z = (y - y.mean()) / y.std()
+    acc = np.zeros((draws, n_groups))
+    for d in range(draws):
+        preds = []
+        for r2 in (r2_base, r2_model):
+            f = np.sqrt(r2) * z + np.sqrt(1 - r2) * rng.normal(size=len(y))
+            b = np.polyfit(f, y, 1)
+            preds.append(np.polyval(b, f))
+        eb, em = (preds[0] - y) ** 2, (preds[1] - y) ** 2
+        for k in range(n_groups):
+            sk = labels == k
+            acc[d, k] = eb[sk].mean() / em[sk].mean() if sk.sum() >= 20 else np.nan
+    return np.nanmean(acc, axis=0)
 
 
 def style(ax):
@@ -140,6 +184,8 @@ def main() -> int:
                     help="models (substrings) for figures 4 and 5")
     ap.add_argument("--mass-bins", type=int, default=3, help="quantile bins of true mass (default 3)")
     ap.add_argument("--bootstrap", type=int, default=400)
+    ap.add_argument("--null-draws", type=int, default=20,
+                    help="simulations per bin for the uniform-improvement null (default 20)")
     ap.add_argument("--ci", type=float, default=68.0, help="interval width in percent")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out-dir", type=Path, default=Path("length_gain"))
@@ -227,11 +273,18 @@ def main() -> int:
             out.append({"model": mdl, "latent": lat, "window": ws, "length_bin": lab,
                         "mass_bin": "all", **r})
             if do_mass:
+                null = null_tercile_ratios(y[s], mq[s], a.mass_bins, r["r2_base"], r["r2"],
+                                           rng, a.null_draws)
                 for k in range(a.mass_bins):
                     sk = s & (mq == k)
                     if sk.sum() < 20:
                         continue
                     r = stats_with_ci(y[sk], pm[sk], pb[sk], a.bootstrap, rng, lo_q, hi_q)
+                    nk = null[k]
+                    r.update(null_mse_ratio=nk,
+                             excess=r["mse_ratio"] / nk if np.isfinite(nk) else np.nan)
+                    if "mse_ratio_lo" in r and np.isfinite(nk):
+                        r.update(excess_lo=r["mse_ratio_lo"] / nk, excess_hi=r["mse_ratio_hi"] / nk)
                     out.append({"model": mdl, "latent": lat, "window": ws, "length_bin": lab,
                                 "mass_bin": mnames[k], "mass_range": mlabs[k], **r})
     res = pd.DataFrame(out)
@@ -354,6 +407,80 @@ def main() -> int:
         fig.savefig(p, dpi=170, bbox_inches="tight", facecolor="white")
         plt.close(fig)
         print(f"wrote {p}")
+
+    if focus:
+        # ---- figure 4b: gain beyond the uniform-improvement null ---------------------
+        fig, axes = plt.subplots(1, len(focus), figsize=(4.4 * len(focus), 4.2), sharey=True,
+                                 squeeze=False)
+        for ax, mdl in zip(axes[0], focus):
+            lat, ws = parse(mdl)
+            for k, mn in enumerate(mnames):
+                d = res[(res["model"] == mdl) & (res["mass_bin"] == mn)].set_index("length_bin").reindex(labs)
+                c = MASS_RAMP[k] if a.mass_bins == 3 else None
+                if "excess_lo" in d:
+                    ax.fill_between(x, d["excess_lo"], d["excess_hi"], color=c, alpha=0.13, lw=0)
+                ax.plot(x, d["excess"], "-o", color=c, lw=1.8, ms=4.5, mec="white", mew=1,
+                        label=f"{mn} mass ({mlabs[k]})")
+            ax.axhline(1, color=MUTED, lw=1.1, ls=(0, (4, 3)))
+            ax.set_xticks(x, labs, rotation=35, ha="right")
+            ax.set_title(("base" if lat == "base" else f"MHLA latent {lat}") + f", window {ws}",
+                         loc="left", fontsize=9.5)
+            ax.set_xlabel(f"{a.length}-band points per light curve")
+            style(ax)
+            ax.legend(frameon=False, fontsize=7.5, loc="upper left")
+        axes[0][0].set_ylabel("observed / expected MSE ratio")
+        fig.suptitle(f"{tl}: gain over {base_short} BEYOND a uniform improvement, by mass tercile  "
+                     "(1 = no mass-specific effect; > 1 = this tercile gains more than expected)",
+                     y=1.02, fontsize=10.5)
+        fig.tight_layout()
+        p = a.out_dir / f"gain_vs_length_mass_excess_{a.target}.png"
+        fig.savefig(p, dpi=170, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"wrote {p}")
+
+        # ---- figure 6: prediction shift and mean residual vs length ------------------
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.5, 4.2))
+        shift_colors = [WINDOW_RAMP[1], "#A06A00", WINDOW_RAMP[3], "#5F6B6A"]
+        allrows = res[res["mass_bin"] == "all"]
+        for j, mdl in enumerate(focus):
+            lat, ws = parse(mdl)
+            d = allrows[allrows["model"] == mdl].set_index("length_bin").reindex(labs)
+            c = shift_colors[j % len(shift_colors)]
+            name = ("base" if lat == "base" else f"latent {lat}") + f", window {ws}"
+            a1.errorbar(x + (j - 1.5) * 0.06, d["shift"], yerr=d["shift_se"], fmt="-o", ms=4.5,
+                        lw=1.6, color=c, mec="white", mew=1, capsize=0, label=name)
+            a2.plot(x, d["bias"], "-o", ms=4.5, lw=1.6, color=c, mec="white", mew=1, label=name)
+        d0 = allrows[allrows["model"] == focus[0]].set_index("length_bin").reindex(labs)
+        a2.plot(x, d0["bias_base"], "--s", ms=4, lw=1.4, color=INK2, label=base_short)
+        for ax, yl, ttl in ((a1, f"mean(model $-$ {base_short}) prediction",
+                             "a   do the models shift their predictions with length?"),
+                            (a2, "mean residual (predicted $-$ true)",
+                             "b   mean residual by length (0 = unbiased in that bin)")):
+            ax.axhline(0, color=MUTED, lw=1.1, ls=(0, (4, 3)))
+            ax.set_xticks(x, labs, rotation=35, ha="right")
+            ax.set_xlabel(f"{a.length}-band points per light curve")
+            ax.set_ylabel(yl)
+            ax.set_title(ttl, loc="left", fontsize=9.5)
+            style(ax)
+        a1.legend(frameon=False, fontsize=7.5)
+        fig.suptitle(f"{tl}: a shift up for long curves would help the high tercile and hurt the low one "
+                     "without adding information", y=1.03, fontsize=10)
+        fig.tight_layout()
+        p = a.out_dir / f"prediction_shift_{a.target}.png"
+        fig.savefig(p, dpi=170, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"wrote {p}")
+
+        print("\nobserved / expected (uniform-improvement null) MSE ratio, by tercile:")
+        for mdl in focus:
+            print(f"  {mdl[-26:]}")
+            t = res[(res["model"] == mdl) & (res["mass_bin"] != "all")].pivot_table(
+                index="mass_bin", columns="length_bin", values="excess").reindex(mnames)
+            print("    " + t.reindex(columns=labs).round(3).to_string().replace("\n", "\n    "))
+        print("\nprediction shift, mean(model - base), by length bin:")
+        for mdl in focus:
+            d = allrows[allrows["model"] == mdl].set_index("length_bin").reindex(labs)
+            print(f"  {mdl[-26:]:>26}: " + "  ".join(f"{v:+.3f}" for v in d["shift"]))
 
     # ---- console summary: is there an upward trend? -------------------------------
     print("\nslope of the MSE ratio across length bins (per 100 points, weighted by bin size):")
