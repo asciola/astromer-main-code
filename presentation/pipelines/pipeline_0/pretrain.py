@@ -211,6 +211,8 @@ if __name__ == '__main__':
                         help='Use KV caching for performance')
     parser.add_argument('--latent-dim', type=int,
                         help="Number of latent dimensions for Multi-head Latent Attention (requires --use-kv-cache). Recommend 1/4 - 1/8 of num-heads * head-dim")
+    parser.add_argument('--linear-attention', action='store_true',
+                        help='Use linear attention (elu+1 kernel, O(L) in window size) instead of softmax. Requires --mask-format K and --temperature 0; incompatible with --use-kv-cache')
 
 
 

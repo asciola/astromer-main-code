@@ -22,6 +22,7 @@ class Encoder(tf.keras.Model):
                  temperature=0.,
                  use_cache=False,
                  latent_dim=None,
+                 linear_attention=False,
                  **kwargs):
         super().__init__(**kwargs)
         # super().__init__(**kwargs)
@@ -41,6 +42,7 @@ class Encoder(tf.keras.Model):
         self.temp           = temperature
         self.use_cache      = use_cache
         self.latent_dim     = latent_dim
+        self.linear_attention = linear_attention
 
         if self.use_cache and self.latent_dim is None:
             raise ValueError("latent_dim must be provided when use_cache=True")
@@ -58,6 +60,7 @@ class Encoder(tf.keras.Model):
                                           temperature=self.temp,
                                           use_cache=self.use_cache,
                                           latent_dim=self.latent_dim,
+                                          linear_attention=self.linear_attention,
                                           name=f'att_layer_{i}')
                             for i in range(self.num_layers)]
 

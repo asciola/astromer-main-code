@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras.utils import serialize_keras_object, deserialize_keras_object
 
-from src.layers.attention import HeadAttentionMulti, SimpleHeadAttentionMultiLatent
+from src.layers.attention import HeadAttentionMulti, SimpleHeadAttentionMultiLatent, LinearHeadAttentionMulti
 
 
 def point_wise_feed_forward_network(d_model, dff):
@@ -13,7 +13,7 @@ def point_wise_feed_forward_network(d_model, dff):
 class AttentionBlock(tf.keras.layers.Layer):
     def __init__(self, head_dim, num_heads, mixer_size, 
                  dropout=0.1, m_alpha=-0.5, mask_format='Q', 
-                 use_leak=False, temperature=0., use_cache=False, latent_dim=None, **kwargs):
+                 use_leak=False, temperature=0., use_cache=False, latent_dim=None, linear_attention=False, **kwargs):
         super(AttentionBlock, self).__init__(**kwargs)
         self.head_dim = head_dim
         self.num_heads = num_heads
@@ -25,7 +25,12 @@ class AttentionBlock(tf.keras.layers.Layer):
         self.temp = temperature
         self.use_cache = use_cache
         self.latent_dim = latent_dim
-        if use_cache:
+        self.linear_attention = linear_attention
+        if use_cache and linear_attention:
+            raise ValueError("use_cache (MHLA) and linear_attention are mutually exclusive")
+        if linear_attention:
+            self.mha = LinearHeadAttentionMulti(self.head_dim, self.num_heads, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
+        elif use_cache:
             if latent_dim is not None:
                 self.mha = SimpleHeadAttentionMultiLatent(self.head_dim, self.num_heads, self.latent_dim, m_alpha=self.m_alpha, mask_format=mask_format, temperature=self.temp)
             else:
@@ -197,6 +202,7 @@ class AttentionBlock(tf.keras.layers.Layer):
             "use_leak": self.use_leak,
             "use_cache": self.use_cache,
             "latent_dim": self.latent_dim,
+            "linear_attention": self.linear_attention,
             "temperature": self.temp
         })
         return config

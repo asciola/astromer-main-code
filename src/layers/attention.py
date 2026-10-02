@@ -315,3 +315,92 @@ class SimpleHeadAttentionMultiLatent(tf.keras.layers.Layer):
             "temperature": self.temperature
         }
         return {**base_config, **config}
+
+class LinearHeadAttentionMulti(tf.keras.layers.Layer):
+    """
+    Multi-head linear attention (Katharopoulos et al. 2020, "Transformers are RNNs").
+
+    Replaces softmax(QK^T)V with a kernel feature map phi(x) = elu(x) + 1:
+        out_i = phi(q_i)^T [sum_j phi(k_j) v_j^T] / (phi(q_i)^T sum_j phi(k_j))
+    Computing the (head_dim x head_dim) sum first costs O(L * head_dim^2) instead
+    of O(L^2 * head_dim), and the L x L attention matrix is never materialized.
+    Attention is bidirectional (non-causal), like the rest of the encoder.
+
+    Masking: mask_in = 1 marks masked/padded steps. Additive key masking in softmax
+    multiplies a key's unnormalized weight by exp(m_alpha), so the same factor scales
+    phi(k_j) here. With the default m_alpha = -1e9 masked keys are removed entirely.
+    Only mask_format='K' is supported, and temperature has no analogue.
+
+    The kernel sums run in float32 because accumulating over L in bfloat16 loses
+    too much precision. The output is cast back to the input dtype.
+    """
+    def __init__(self, head_dim, num_heads, m_alpha, mask_format, temperature,
+                 eps=1e-6, **kwargs):
+        super().__init__(**kwargs)
+        if mask_format != 'K':
+            raise ValueError(f"linear attention only supports mask_format='K', got {mask_format!r}")
+        if temperature != 0.:
+            raise ValueError("linear attention has no softmax temperature; use temperature=0.")
+
+        self.num_heads   = num_heads
+        self.head_dim    = head_dim
+        self.mask_format = mask_format
+        self.m_alpha     = m_alpha
+        self.temperature = temperature
+        self.eps         = eps
+        self.d_model     = self.num_heads * self.head_dim
+        self.depth       = self.head_dim
+        self.wq = tf.keras.layers.Dense(self.d_model, name='WQ')
+        self.wk = tf.keras.layers.Dense(self.d_model, name='WK')
+        self.wv = tf.keras.layers.Dense(self.d_model, name='WV')
+        self.dense = tf.keras.layers.Dense(self.d_model, name='attmerge')
+
+    def split_heads(self, x, batch_size, name='qkv'):
+        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
+        return tf.transpose(x, perm=[0, 2, 1, 3], name=name)
+
+    @staticmethod
+    def feature_map(x):
+        return tf.nn.elu(x) + 1.
+
+    def call(self, x, training=None, mask=None):
+        batch_size = tf.shape(x)[0]
+
+        q = self.split_heads(self.wq(x), batch_size, name='Q')  # (B, H, L, depth)
+        k = self.split_heads(self.wk(x), batch_size, name='K')  # (B, H, L, depth)
+        v = self.split_heads(self.wv(x), batch_size, name='V')  # (B, H, L, depth)
+
+        phi_q = self.feature_map(tf.cast(q, tf.float32))
+        phi_k = self.feature_map(tf.cast(k, tf.float32))
+        v32   = tf.cast(v, tf.float32)
+
+        if mask is not None:
+            # mask: (B, L, 1) -> per-key weight exp(m_alpha * mask), (B, 1, L, 1)
+            m = tf.minimum(1., tf.cast(mask, tf.float32))
+            m = tf.reshape(m, (batch_size, 1, -1, 1))
+            phi_k = phi_k * tf.exp(tf.cast(self.m_alpha, tf.float32) * m)
+
+        kv = tf.einsum('bhld,bhle->bhde', phi_k, v32)              # (B, H, depth, depth)
+        k_sum = tf.reduce_sum(phi_k, axis=2)                        # (B, H, depth)
+        num = tf.einsum('bhld,bhde->bhle', phi_q, kv)               # (B, H, L, depth)
+        den = tf.einsum('bhld,bhd->bhl', phi_q, k_sum)[..., None]   # (B, H, L, 1)
+        attn = tf.cast(num / (den + self.eps), x.dtype)
+
+        attn = tf.transpose(attn, perm=[0, 2, 1, 3])                # (B, L, H, depth)
+        concat_attention = tf.reshape(attn, (batch_size, -1, self.d_model))
+        output = self.dense(concat_attention)                       # (B, L, d_model)
+
+        # No L x L weights exist, so there is nothing to return for them
+        return output, None, None, (q, k, v)
+
+    def get_config(self):
+        base_config = super().get_config()
+        config = {
+            "head_dim": self.head_dim,
+            "num_heads": self.num_heads,
+            "m_alpha": self.m_alpha,
+            "mask_format": self.mask_format,
+            "temperature": self.temperature,
+            "eps": self.eps
+        }
+        return {**base_config, **config}

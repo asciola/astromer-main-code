@@ -42,7 +42,8 @@ def get_ASTROMER(num_layers=2,
                  trainable_mask=True,
                  temperature=0.,
                  use_cache=False,
-                 latent_dim=None):
+                 latent_dim=None,
+                 linear_attention=False):
     
     print('[INFO] Temperature: {:.2f}'.format(temperature))
     print('[INFO] Mask format: {}'.format(mask_format))
@@ -70,6 +71,7 @@ def get_ASTROMER(num_layers=2,
                       temperature=temperature,
                       use_cache=use_cache,
                       latent_dim=latent_dim,
+                      linear_attention=linear_attention,
                       name='encoder')
 
     x = encoder(placeholder)

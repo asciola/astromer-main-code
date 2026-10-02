@@ -22,6 +22,9 @@ def build_model(params, return_weights=False):
 
     if not 'latent_dim' in params.keys():
         params['latent_dim'] = None
+
+    if not 'linear_attention' in params.keys():
+        params['linear_attention'] = False
     
     
     if params['arch'] == 'zero':
@@ -58,7 +61,8 @@ def build_model(params, return_weights=False):
                          trainable_mask=not params['no_msk_token'],
                          temperature=params['temperature'],
                          use_cache=params['use_kv_cache'],
-                         latent_dim=params['latent_dim']
+                         latent_dim=params['latent_dim'],
+                         linear_attention=params['linear_attention']
                          )
 
     return model
