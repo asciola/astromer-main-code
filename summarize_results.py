@@ -39,6 +39,8 @@ CONTROL = "CONTROL: summary stats only"
 TARGETS = {"z": "z", "m": "log M_BH", "e": "log L/L_Edd"}
 PAT_LATENT = re.compile(r"_K_01_(\d+)_(\d+)$")
 PAT_BASE = re.compile(r"_base_\d+_(\d+)_K_baseline$")
+# linear-attention models, e.g. ztfsurvivors_full_0.1_6_5e-5_linear_256_400_K
+PAT_LINEAR = re.compile(r"_linear_\d+_(\d+)_K(?:_.*)?$")
 
 
 def parse(name: str):
@@ -48,6 +50,9 @@ def parse(name: str):
     m = PAT_BASE.search(name)
     if m:
         return "base", int(m.group(1))
+    m = PAT_LINEAR.search(name)
+    if m:
+        return "linear", int(m.group(1))
     return "?", None
 
 
@@ -55,7 +60,10 @@ def short(name: str) -> str:
     lat, ws = parse(name)
     if name == CONTROL:
         return "control (stats only)"
-    return f"latent {lat}, window {ws}" if ws else name
+    if not ws:
+        return name
+    fam = {"base": "base", "linear": "linear attention"}.get(lat, f"latent {lat}")
+    return f"{fam}, window {ws}"
 
 
 def load_run(label: str, d: Path, targets: list[str]) -> pd.DataFrame:

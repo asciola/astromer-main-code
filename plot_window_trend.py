@@ -14,6 +14,7 @@ Reads one summary.csv from fit_regressor.py and draws, for each target (z, m, e)
 Model names are parsed for latent and window:
     ..._K_01_<latent>_<window>          -> latent <latent>
     ..._base_256_<window>_K_baseline    -> latent "base" (no latent bottleneck)
+    ..._linear_256_<window>_K           -> latent "linear" (linear attention)
 Anything else is skipped with a note.
 
     python plot_window_trend.py --summary agn_mlp_stats/summary.csv \\
@@ -45,6 +46,8 @@ CONTROL = "CONTROL: summary stats only"
 
 PAT_LATENT = re.compile(r"_K_01_(\d+)_(\d+)$")
 PAT_BASE = re.compile(r"_base_\d+_(\d+)_K_baseline$")
+# linear-attention models, e.g. ztfsurvivors_full_0.1_6_5e-5_linear_256_400_K
+PAT_LINEAR = re.compile(r"_linear_\d+_(\d+)_K(?:_.*)?$")
 
 
 def parse(name: str):
@@ -54,7 +57,14 @@ def parse(name: str):
     m = PAT_BASE.search(name)
     if m:
         return "base", int(m.group(1))
+    m = PAT_LINEAR.search(name)
+    if m:
+        return "linear", int(m.group(1))
     return None, None
+
+
+def fam_label(lat) -> str:
+    return {"base": "base", "linear": "linear attention"}.get(lat, f"latent {lat}")
 
 
 def main() -> int:
@@ -87,8 +97,8 @@ def main() -> int:
         print("no models parsed", file=sys.stderr)
         return 1
 
-    lat_num = sorted(v for v in d["latent"].unique() if v != "base")
-    latents = lat_num + (["base"] if (d["latent"] == "base").any() else [])
+    lat_num = sorted(v for v in d["latent"].unique() if not isinstance(v, str))
+    latents = lat_num + [f for f in ("linear", "base") if (d["latent"] == f).any()]
     windows = sorted(d["window"].unique())
     tgts = [(k, lab) for k, lab in TARGETS if k in args.targets.split(",") and f"r2_{k}" in d]
     hl = [int(h) if h.isdigit() else h for h in args.highlight]
@@ -157,7 +167,7 @@ def main() -> int:
             if lat in hl_colors:
                 c = hl_colors[lat]
                 ax.plot(x, y, "-o", color=c, lw=2.0, ms=5.5, mec="white", mew=1.2, zorder=4)
-                end_labels.append([y[-1], x[-1], f"latent {lat}"])
+                end_labels.append([y[-1], x[-1], fam_label(lat)])
             else:
                 ls = (0, (3, 2)) if lat == "base" else "-"
                 ax.plot(x, y, ls=ls, color=LINE_GRAY, lw=1.1, zorder=2)
@@ -189,13 +199,13 @@ def main() -> int:
             ax.spines[sp].set_visible(False)
 
         bi, bj = best
-        print(f"  {k}: best latent {latents[bi]}, window {windows[bj]}, R2 {grid[bi, bj]:.3f}"
+        print(f"  {k}: best {fam_label(latents[bi])}, window {windows[bj]}, R2 {grid[bi, bj]:.3f}"
               + (f"  (control {c0:.3f}, gain {grid[bi, bj] - c0:+.3f})" if np.isfinite(c0) else ""))
         for lat in hl:
             if lat in latents:
                 v = grid[latents.index(lat)]
                 trend = ", ".join(f"{w}:{x:.3f}" for w, x in zip(windows, v) if np.isfinite(x))
-                print(f"     latent {lat}: {trend}")
+                print(f"     {fam_label(lat)}: {trend}")
 
     head = str(d["head"].iloc[0]) if "head" in d else ""
     ttl = args.title or f"{args.summary.parent.name}  ({head})"

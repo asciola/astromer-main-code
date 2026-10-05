@@ -73,6 +73,8 @@ DIVERGE = LinearSegmentedColormap.from_list(
 TLABEL = {"m": r"$\log M_{\rm BH}$", "z": "redshift z", "e": r"$\log L/L_{\rm Edd}$"}
 PAT_LATENT = re.compile(r"_K_01_(\d+)_(\d+)$")
 PAT_BASE = re.compile(r"_base_\d+_(\d+)_K_baseline$")
+# linear-attention models, e.g. ztfsurvivors_full_0.1_6_5e-5_linear_256_400_K
+PAT_LINEAR = re.compile(r"_linear_\d+_(\d+)_K(?:_.*)?$")
 CONTROL = "CONTROL: summary stats only"
 PAVLOS_BINS = [0, 200, 500, np.inf]
 
@@ -84,7 +86,18 @@ def parse(name):
     m = PAT_BASE.search(name)
     if m:
         return "base", int(m.group(1))
+    m = PAT_LINEAR.search(name)
+    if m:
+        return "linear", int(m.group(1))
     return None, None
+
+
+def fam_title(lat, short=False):
+    if lat == "base":
+        return "base" if short else "no latent bottleneck (base)"
+    if lat == "linear":
+        return "linear attention"
+    return f"latent {lat}" if short else f"MHLA, latent {lat}"
 
 
 def bin_labels(edges):
@@ -177,8 +190,9 @@ def main() -> int:
     ap.add_argument("--length", default="r", choices=["r", "g", "i", "max", "sum"])
     ap.add_argument("--length-bins", type=float, nargs="+",
                     default=[0, 200, 300, 400, 500, 600, 700, 800, np.inf])
-    ap.add_argument("--latents", nargs="+", default=["4", "16", "128"],
-                    help="latent families to draw next to base in figure 3")
+    ap.add_argument("--latents", nargs="+", default=["4", "16", "128", "linear"],
+                    help="families to draw next to base in figure 3: latent sizes and/or "
+                         "'linear' (families not in the predictions are skipped)")
     ap.add_argument("--focus", nargs="+",
                     default=["base_256_800_K", "K_01_16_200", "K_01_4_800", "K_01_16_800"],
                     help="models (substrings) for figures 4 and 5")
@@ -320,7 +334,7 @@ def main() -> int:
                 ax.plot(x, d[metric], "-o", color=c, lw=1.8, ms=4.5, mec="white", mew=1, label=f"window {w}")
             ax.axhline(1, color=MUTED, lw=1.1, ls=(0, (4, 3)))
             ax.set_xticks(x, labs, rotation=35, ha="right")
-            ax.set_title("no latent bottleneck (base)" if fam == "base" else f"MHLA, latent {fam}",
+            ax.set_title(fam_title(fam),
                          loc="left", fontsize=9.5)
             ax.set_xlabel(f"{a.length}-band points per light curve")
             style(ax)
@@ -352,7 +366,7 @@ def main() -> int:
                         label=f"{mn} mass ({mlabs[k]})")
             ax.axhline(1, color=MUTED, lw=1.1, ls=(0, (4, 3)))
             ax.set_xticks(x, labs, rotation=35, ha="right")
-            ax.set_title(("base" if lat == "base" else f"MHLA latent {lat}") + f", window {ws}",
+            ax.set_title(fam_title(lat, short=True) + f", window {ws}",
                          loc="left", fontsize=9.5)
             ax.set_xlabel(f"{a.length}-band points per light curve")
             style(ax)
@@ -392,7 +406,7 @@ def main() -> int:
             ax.set_yticks(range(a.mass_bins),
                           [f"{m}\n{r}" for m, r in zip(mnames, mlabs)] if j_ax == 0 else [])
             ax.set_xlabel(f"{a.length}-band points per light curve")
-            ax.set_title(("base" if lat == "base" else f"MHLA latent {lat}") + f", window {ws}",
+            ax.set_title(fam_title(lat, short=True) + f", window {ws}",
                          loc="left", fontsize=9.5)
             ax.tick_params(length=0)
             for sp in ax.spines.values():
@@ -423,7 +437,7 @@ def main() -> int:
                         label=f"{mn} mass ({mlabs[k]})")
             ax.axhline(1, color=MUTED, lw=1.1, ls=(0, (4, 3)))
             ax.set_xticks(x, labs, rotation=35, ha="right")
-            ax.set_title(("base" if lat == "base" else f"MHLA latent {lat}") + f", window {ws}",
+            ax.set_title(fam_title(lat, short=True) + f", window {ws}",
                          loc="left", fontsize=9.5)
             ax.set_xlabel(f"{a.length}-band points per light curve")
             style(ax)
@@ -446,7 +460,7 @@ def main() -> int:
             lat, ws = parse(mdl)
             d = allrows[allrows["model"] == mdl].set_index("length_bin").reindex(labs)
             c = shift_colors[j % len(shift_colors)]
-            name = ("base" if lat == "base" else f"latent {lat}") + f", window {ws}"
+            name = fam_title(lat, short=True) + f", window {ws}"
             a1.errorbar(x + (j - 1.5) * 0.06, d["shift"], yerr=d["shift_se"], fmt="-o", ms=4.5,
                         lw=1.6, color=c, mec="white", mew=1, capsize=0, label=name)
             a2.plot(x, d["bias"], "-o", ms=4.5, lw=1.6, color=c, mec="white", mew=1, label=name)
