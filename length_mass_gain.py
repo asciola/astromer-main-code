@@ -46,6 +46,20 @@ LENGTH
   Only ~5% of sources have fewer than 200 r-band points, so Pavlos' three buckets are
   far from equal; the plots use finer bins (--length-bins) to show the shape.
 
+TIME INSTEAD OF POINTS (--band picks the band, default r)
+  --length span     days from first to last observation (mjd_max - mjd_min in lc_index).
+                    Almost every ZTF curve spans ~6 yr, so only the short tail varies.
+  --length wspan    days covered by ONE window of --span-window points (default 200),
+                    averaged over the curve's windows: the time range the encoder sees
+                    at once. Same value for every model, so all lines share the bins.
+  --length cadence  median days between consecutive observations.
+  wspan and cadence need --time-features (lc_time_features.csv from lc_time_features.py).
+  Fewer points over the same ~6 yr means sparser sampling, so windows of curves with
+  FEWER points cover MORE time: wspan is anti-correlated with point count.
+
+    python length_mass_gain.py --pred agn_mlp/predictions.csv --index $IDX \\
+        --length wspan --time-features lc_time_features.csv --out-dir wspan_mlp
+
     python length_mass_gain.py --pred agn_ridge/predictions.csv --index $IDX --out-dir lengain_ridge
     python length_mass_gain.py --pred agn_mlp/predictions.csv   --index $IDX --out-dir lengain_mlp
     python length_mass_gain.py ... --target z --latents 4 16 --focus K_01_16_800 base_256_800
@@ -77,6 +91,11 @@ PAT_BASE = re.compile(r"_base_\d+_(\d+)_K_baseline$")
 PAT_LINEAR = re.compile(r"_linear_\d+_(\d+)_K(?:_.*)?$")
 CONTROL = "CONTROL: summary stats only"
 PAVLOS_BINS = [0, 200, 500, np.inf]
+TIME_MEASURES = ("span", "wspan", "cadence")
+DEFAULT_BINS = {"points": [0, 200, 300, 400, 500, 600, 700, 800, np.inf],
+                "span": [0, 1500, 2000, 2150, 2200, 2250, 2275, np.inf],
+                "wspan": [0, 600, 800, 1000, 1200, 1500, np.inf],
+                "cadence": [0, 2, 3, 4, 6, np.inf]}
 
 
 def parse(name):
@@ -103,7 +122,14 @@ def fam_title(lat, short=False):
 def bin_labels(edges):
     out = []
     for a, b in zip(edges[:-1], edges[1:]):
-        out.append(f"<{int(b)}" if a == 0 else (f"{int(a)}+" if not np.isfinite(b) else f"{int(a)}-{int(b)}"))
+        if a == 0 and not np.isfinite(b):
+            out.append("all")
+        elif a == 0:
+            out.append(f"<{int(b)}")
+        elif not np.isfinite(b):
+            out.append(f"{int(a)}+")
+        else:
+            out.append(f"{int(a)}-{int(b)}")
     return out
 
 
@@ -187,9 +213,15 @@ def main() -> int:
     ap.add_argument("--target", default="m", choices=["m", "z", "e"])
     ap.add_argument("--base", default="base_256_200_K_baseline",
                     help="substring naming the reference model (default: base, window 200)")
-    ap.add_argument("--length", default="r", choices=["r", "g", "i", "max", "sum"])
+    ap.add_argument("--length", default="r",
+                    choices=["r", "g", "i", "max", "sum", "span", "wspan", "cadence"])
+    ap.add_argument("--band", default="r", help="band for --length span/wspan/cadence")
+    ap.add_argument("--time-features", type=Path,
+                    help="lc_time_features.csv (needed for --length wspan/cadence)")
+    ap.add_argument("--span-window", type=int, default=200,
+                    help="window size (points) for --length wspan (default 200)")
     ap.add_argument("--length-bins", type=float, nargs="+",
-                    default=[0, 200, 300, 400, 500, 600, 700, 800, np.inf])
+                    help="bin edges (default depends on --length)")
     ap.add_argument("--latents", nargs="+", default=["4", "16", "128", "linear"],
                     help="families to draw next to base in figure 3: latent sizes and/or "
                          "'linear' (families not in the predictions are skipped)")
@@ -211,13 +243,42 @@ def main() -> int:
 
     # ---- lengths and masses per source ------------------------------------------
     idx = pd.read_csv(a.index, dtype={"source_id": str})
-    npts = idx.pivot_table(index="source_id", columns="band_name", values="n_points",
-                           aggfunc="first").fillna(0)
-    length = {"max": npts.max(axis=1), "sum": npts.sum(axis=1)}.get(
-        a.length, npts[a.length] if a.length in npts else None)
-    if length is None:
-        print(f"no band {a.length!r} in lc_index.csv", file=sys.stderr)
-        return 1
+    timed = a.length in TIME_MEASURES
+    if timed:
+        col = {"span": "span_days", "wspan": f"wspan_{a.span_window}",
+               "cadence": "dt_median"}[a.length]
+        if a.length == "span":
+            idx[col] = idx["mjd_max"] - idx["mjd_min"]
+            src = idx
+        else:
+            if a.time_features is None:
+                print(f"--length {a.length} needs --time-features", file=sys.stderr)
+                return 1
+            tf_ = pd.read_csv(a.time_features, dtype={"lcid": str})
+            if col not in tf_:
+                print(f"no column {col!r} in {a.time_features}", file=sys.stderr)
+                return 1
+            src = idx[["lcid", "source_id", "band_name"]].merge(tf_[["lcid", col]], on="lcid")
+        length = src[src["band_name"] == a.band].drop_duplicates("source_id") \
+            .set_index("source_id")[col]
+        if length.empty:
+            print(f"no band {a.band!r} in lc_index.csv", file=sys.stderr)
+            return 1
+    else:
+        npts = idx.pivot_table(index="source_id", columns="band_name", values="n_points",
+                               aggfunc="first").fillna(0)
+        length = {"max": npts.max(axis=1), "sum": npts.sum(axis=1)}.get(
+            a.length, npts[a.length] if a.length in npts else None)
+        if length is None:
+            print(f"no band {a.length!r} in lc_index.csv", file=sys.stderr)
+            return 1
+    if a.length_bins is None:
+        a.length_bins = DEFAULT_BINS[a.length if timed else "points"]
+    xlab = {"span": f"{a.band}-band time span (days)",
+            "wspan": f"days covered by one {a.span_window}-point {a.band}-band window",
+            "cadence": f"median days between {a.band}-band points"}.get(
+        a.length, f"{a.length}-band points per light curve")
+    what = "time range" if timed else "light-curve length"
     per_src = idx.drop_duplicates("source_id").set_index("source_id")
 
     # ---- predictions ------------------------------------------------------------
@@ -242,7 +303,8 @@ def main() -> int:
 
     # ---- step 1: how the lengths break down -------------------------------------
     rows = []
-    for scheme, edges in (("Pavlos", PAVLOS_BINS), ("plot bins", a.length_bins)):
+    for scheme, edges in ((("Pavlos", PAVLOS_BINS),) if not timed else ()) + \
+            (("plot bins", a.length_bins),):
         labs = bin_labels(edges)
         c = pd.cut(L, edges, right=False, labels=labs).value_counts().reindex(labs)
         for lab, v in c.items():
@@ -336,14 +398,14 @@ def main() -> int:
             ax.set_xticks(x, labs, rotation=35, ha="right")
             ax.set_title(fam_title(fam),
                          loc="left", fontsize=9.5)
-            ax.set_xlabel(f"{a.length}-band points per light curve")
+            ax.set_xlabel(xlab)
             style(ax)
             ax.legend(frameon=False, fontsize=7.5, loc="upper left")
         axes[0][0].set_ylabel(ylab)
         for j, n in enumerate(counts):
             axes[0][0].annotate(f"{n:,}", (j, 0), xycoords=("data", "axes fraction"), xytext=(0, 3),
                                 textcoords="offset points", ha="center", fontsize=6.5, color=MUTED)
-        fig.suptitle(f"{tl}: gain over {base_short}, by light-curve length  "
+        fig.suptitle(f"{tl}: gain over {base_short}, by {what}  "
                      f"(> 1 = better; band = {a.ci:.0f}% bootstrap interval; numbers = sources per bin)",
                      y=1.02, fontsize=10.5)
         fig.tight_layout()
@@ -368,11 +430,11 @@ def main() -> int:
             ax.set_xticks(x, labs, rotation=35, ha="right")
             ax.set_title(fam_title(lat, short=True) + f", window {ws}",
                          loc="left", fontsize=9.5)
-            ax.set_xlabel(f"{a.length}-band points per light curve")
+            ax.set_xlabel(xlab)
             style(ax)
             ax.legend(frameon=False, fontsize=7.5, loc="upper left")
         axes[0][0].set_ylabel(f"MSE({base_short}) / MSE(model)")
-        fig.suptitle(f"{tl}: gain over {base_short} by length, split by true-mass tercile  "
+        fig.suptitle(f"{tl}: gain over {base_short} by {what}, split by true-mass tercile  "
                      f"(MSE ratio; > 1 = better)", y=1.02, fontsize=10.5)
         fig.tight_layout()
         p = a.out_dir / f"gain_vs_length_mass_{a.target}.png"
@@ -405,7 +467,7 @@ def main() -> int:
             ax.set_xticks(range(len(labs)), labs, rotation=35, ha="right")
             ax.set_yticks(range(a.mass_bins),
                           [f"{m}\n{r}" for m, r in zip(mnames, mlabs)] if j_ax == 0 else [])
-            ax.set_xlabel(f"{a.length}-band points per light curve")
+            ax.set_xlabel(xlab)
             ax.set_title(fam_title(lat, short=True) + f", window {ws}",
                          loc="left", fontsize=9.5)
             ax.tick_params(length=0)
@@ -415,7 +477,7 @@ def main() -> int:
         cb = fig.colorbar(im, ax=axes[0].tolist(), fraction=0.02, pad=0.01)
         cb.set_label(f"MSE({base_short}) / MSE(model)", fontsize=8)
         cb.outline.set_visible(False)
-        fig.suptitle(f"{tl}: gain over {base_short} by length and mass  "
+        fig.suptitle(f"{tl}: gain over {base_short} by {what} and mass  "
                      "(cell: MSE ratio, sources)", y=1.03, fontsize=10.5)
         p = a.out_dir / f"gain_length_mass_map_{a.target}.png"
         fig.savefig(p, dpi=170, bbox_inches="tight", facecolor="white")
@@ -439,7 +501,7 @@ def main() -> int:
             ax.set_xticks(x, labs, rotation=35, ha="right")
             ax.set_title(fam_title(lat, short=True) + f", window {ws}",
                          loc="left", fontsize=9.5)
-            ax.set_xlabel(f"{a.length}-band points per light curve")
+            ax.set_xlabel(xlab)
             style(ax)
             ax.legend(frameon=False, fontsize=7.5, loc="upper left")
         axes[0][0].set_ylabel("observed / expected MSE ratio")
@@ -472,7 +534,7 @@ def main() -> int:
                              "b   mean residual by length (0 = unbiased in that bin)")):
             ax.axhline(0, color=MUTED, lw=1.1, ls=(0, (4, 3)))
             ax.set_xticks(x, labs, rotation=35, ha="right")
-            ax.set_xlabel(f"{a.length}-band points per light curve")
+            ax.set_xlabel(xlab)
             ax.set_ylabel(yl)
             ax.set_title(ttl, loc="left", fontsize=9.5)
             style(ax)
@@ -497,8 +559,11 @@ def main() -> int:
             print(f"  {mdl[-26:]:>26}: " + "  ".join(f"{v:+.3f}" for v in d["shift"]))
 
     # ---- console summary: is there an upward trend? -------------------------------
-    print("\nslope of the MSE ratio across length bins (per 100 points, weighted by bin size):")
-    centers = np.array([(e0 + (e1 if np.isfinite(e1) else e0 + 200)) / 2
+    unit, per = {"span": ("days", 100), "wspan": ("days", 100), "cadence": ("days", 1)}.get(
+        a.length, ("points", 100))
+    print(f"\nslope of the MSE ratio across {what} bins (per {per} {unit}, weighted by bin size):")
+    last_w = edges[-2] - edges[-3] if len(edges) > 2 else per
+    centers = np.array([(e0 + (e1 if np.isfinite(e1) else e0 + last_w)) / 2
                         for e0, e1 in zip(edges[:-1], edges[1:])])
     for mdl in [base] + focus:
         if mdl == base:
@@ -508,7 +573,7 @@ def main() -> int:
             okk = d["mse_ratio"].notna().to_numpy()
             if okk.sum() < 3:
                 continue
-            sl = np.polyfit(centers[okk] / 100, d["mse_ratio"].to_numpy()[okk], 1,
+            sl = np.polyfit(centers[okk] / per, d["mse_ratio"].to_numpy()[okk], 1,
                             w=np.sqrt(d["n"].to_numpy()[okk]))[0]
             print(f"  {mdl[-26:]:>26}  {mn:>5}: {sl:+.4f}")
     print(f"\nwrote {a.out_dir}/gain_by_length.csv and length_breakdown.csv")
