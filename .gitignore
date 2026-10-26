@@ -11,3 +11,18 @@ big_atlas.zip
 user
 literature
 results
+
+# macOS
+.DS_Store
+
+# AGN study: data and outputs (kept local or on the cluster)
+data/alcock/
+/survivor_positions_parts/
+/*.parquet
+/*.csv
+/*.png
+*.npz
+# pulled-back cluster results; keep only the SLURM scripts and model list
+cluster_results/*
+!cluster_results/*.sh
+!cluster_results/models.txt
