@@ -4,12 +4,15 @@
 Reads one summary.csv from fit_regressor.py and draws, for each target (z, m, e):
 
   left   a latent x window grid. Each cell shows the model's R^2; the color is its
-         gain over the summary-statistics control in the same run (teal = better
-         than the control, brown = worse, gray = about the same), so the grid
-         answers "which models add anything" at a glance.
+         gain over the reference (teal = better, brown = worse, gray = about the
+         same). --reference control (default): the summary-statistics control in
+         the same run, i.e. "which models add anything". --reference base: standard
+         attention (no latent bottleneck) at the SAME window size, i.e. "what does
+         MHLA add over standard attention"; the base row is then 0 by construction.
   right  R^2 against window size, one line per latent. All latents are drawn in
          gray; the ones named by --highlight (default 4 and 16) are colored and
-         labeled, and the control is the dashed line.
+         labeled, and the control is the dashed line. With --reference base,
+         standard attention is drawn as a solid black line and labeled.
 
 Model names are parsed for latent and window:
     ..._K_01_<latent>_<window>          -> latent <latent>
@@ -19,6 +22,8 @@ Anything else is skipped with a note.
 
     python plot_window_trend.py --summary agn_mlp_stats/summary.csv \\
         --title "MLP, statistics + embeddings" --out window_trend_mlp_stats.png
+    python plot_window_trend.py --summary agn_mlp/summary.csv --reference base \\
+        --title "MLP, embeddings only" --out window_trend_mlp_vs_standard.png
     python plot_window_trend.py --summary agn_mlp_stats/summary.csv --highlight 4 16 128
 """
 from __future__ import annotations
@@ -74,6 +79,9 @@ def main() -> int:
     ap.add_argument("--targets", default="z,m,e")
     ap.add_argument("--highlight", nargs="+", default=["4", "16"],
                     help="latents to color in the line panels (default 4 16; 'base' allowed)")
+    ap.add_argument("--reference", default="control", choices=["control", "base"],
+                    help="what the grid colors are measured against: the summary-stats "
+                         "control (default) or standard attention at the same window")
     ap.add_argument("--title", default=None)
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
@@ -101,7 +109,14 @@ def main() -> int:
     latents = lat_num + [f for f in ("linear", "base") if (d["latent"] == f).any()]
     windows = sorted(d["window"].unique())
     tgts = [(k, lab) for k, lab in TARGETS if k in args.targets.split(",") and f"r2_{k}" in d]
+    vs_base = args.reference == "base"
+    if vs_base and "base" not in latents:
+        print("--reference base needs base (standard attention) models in the summary",
+              file=sys.stderr)
+        return 1
     hl = [int(h) if h.isdigit() else h for h in args.highlight]
+    if vs_base:
+        hl = [h for h in hl if h != "base"]
     hl_colors = {h: c for h, c in zip(hl, [ACCENT, ACCENT2])}
     if len(hl) > 2:
         print("note: only the first two --highlight latents get a color; the rest stay gray")
@@ -123,7 +138,11 @@ def main() -> int:
         grid = np.full((len(latents), len(windows)), np.nan)
         for _, r in d.iterrows():
             grid[latents.index(r["latent"]), windows.index(r["window"])] = r[col]
-        gain = grid - c0 if np.isfinite(c0) else grid - np.nanmean(grid)
+        if vs_base:
+            ref_row = grid[latents.index("base")]
+            gain = grid - ref_row[None, :]
+        else:
+            gain = grid - c0 if np.isfinite(c0) else grid - np.nanmean(grid)
 
         # ---- heatmap -----------------------------------------------------------
         ax = axes[row, 0]
@@ -141,17 +160,23 @@ def main() -> int:
         ax.add_patch(plt.Rectangle((best[1] - 0.5, best[0] - 0.5), 1, 1, fill=False,
                                    ec=INK, lw=1.6))
         ax.set_xticks(range(len(windows)), [str(w) for w in windows])
-        ax.set_yticks(range(len(latents)), [str(l) for l in latents])
+        ax.set_yticks(range(len(latents)),
+                      ["standard" if (vs_base and l == "base") else str(l) for l in latents])
         ax.set_xlabel("window size")
         ax.set_ylabel("latent size")
         ax.tick_params(length=0)
         for sp in ax.spines.values():
             sp.set_visible(False)
         ctrl_txt = f"control R$^2$ = {c0:.3f}" if np.isfinite(c0) else "no control row"
-        ax.set_title(f"{lab}:  R$^2$ per model  (color = gain over control; {ctrl_txt})",
-                     loc="left", fontsize=9, color=INK)
+        if vs_base:
+            ax.set_title(f"{lab}:  R$^2$ per model  (color = gain over standard attention, "
+                         "same window)", loc="left", fontsize=9, color=INK)
+        else:
+            ax.set_title(f"{lab}:  R$^2$ per model  (color = gain over control; {ctrl_txt})",
+                         loc="left", fontsize=9, color=INK)
         cb = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.015)
-        cb.set_label("R$^2$ $-$ control", fontsize=8, color=INK2)
+        cb.set_label("R$^2$ $-$ standard attention" if vs_base else "R$^2$ $-$ control",
+                     fontsize=8, color=INK2)
         cb.outline.set_visible(False)
         cb.ax.tick_params(labelsize=7, colors=MUTED)
 
@@ -164,7 +189,10 @@ def main() -> int:
             if sub.empty:
                 continue
             x, y = sub["window"].to_numpy(), sub[col].to_numpy()
-            if lat in hl_colors:
+            if vs_base and lat == "base":
+                ax.plot(x, y, "-s", color=INK, lw=2.0, ms=5, mec="white", mew=1.2, zorder=5)
+                end_labels.append([y[-1], x[-1], "standard attention"])
+            elif lat in hl_colors:
                 c = hl_colors[lat]
                 ax.plot(x, y, "-o", color=c, lw=2.0, ms=5.5, mec="white", mew=1.2, zorder=4)
                 end_labels.append([y[-1], x[-1], fam_label(lat)])
@@ -191,7 +219,8 @@ def main() -> int:
         ax.set_xlabel("window size")
         ax.set_ylabel("out-of-fold R$^2$")
         ax.set_title(f"{lab}:  R$^2$ vs window  (gray = other latents"
-                     + (", dashed = base" if "base" in latents else "") + ")",
+                     + (", black = standard attention" if vs_base else
+                        ", dashed = base" if "base" in latents else "") + ")",
                      loc="left", fontsize=9, color=INK)
         ax.grid(True, color=RULE, lw=0.6, alpha=0.7)
         ax.set_axisbelow(True)
@@ -201,6 +230,10 @@ def main() -> int:
         bi, bj = best
         print(f"  {k}: best {fam_label(latents[bi])}, window {windows[bj]}, R2 {grid[bi, bj]:.3f}"
               + (f"  (control {c0:.3f}, gain {grid[bi, bj] - c0:+.3f})" if np.isfinite(c0) else ""))
+        if vs_base:
+            beat = np.nansum(gain[[i for i, l in enumerate(latents) if l != "base"]] > 0)
+            tot = np.isfinite(gain[[i for i, l in enumerate(latents) if l != "base"]]).sum()
+            print(f"     beat standard attention at the same window: {int(beat)}/{int(tot)}")
         for lat in hl:
             if lat in latents:
                 v = grid[latents.index(lat)]
@@ -211,8 +244,10 @@ def main() -> int:
     ttl = args.title or f"{args.summary.parent.name}  ({head})"
     fig.subplots_adjust(top=0.93)
     fig.suptitle(ttl, y=0.975, fontsize=11.5, color=INK)
-    fig.text(0.5, -0.01, "Boxed cell = best model for that target. Gains are relative to the "
-             "summary-statistics control fitted with the same head in the same run.",
+    fig.text(0.5, -0.01, "Boxed cell = best model for that target. Gains are relative to "
+             + ("standard attention (no latent bottleneck) at the same window size, fitted "
+                "with the same head in the same run." if vs_base else
+                "the summary-statistics control fitted with the same head in the same run."),
              ha="center", va="top", fontsize=7.8, color=MUTED)
     out = args.out or Path(f"window_trend_{args.summary.parent.name}.png")
     fig.savefig(out, dpi=180, bbox_inches="tight", facecolor="white")
