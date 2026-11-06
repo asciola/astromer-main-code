@@ -20,10 +20,14 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK   # let numpy use the cores you aske
 # FRAME=rest uses the rest-frame records written by restframe_records.py and drops
 # redshift as a target (the rest-frame time axis encodes it); default is observed.
 ROOT=/n/holylabs/protopapas_lab/Lab/asciola/data
+# IDX, EMB, TARGETS and OUT already set in the environment win (run_rest_duration.sh
+# uses that; set them in the shell, not via --export, which splits on commas).
 if [[ "${FRAME:-observed}" == "rest" ]]; then
-    IDX=$ROOT/agn_test_rest/fold_0/test/lc_index.csv; EMB=emb_agn_rest; TARGETS=m,e; SUFFIX=_rest
+    IDX=${IDX:-$ROOT/agn_test_rest/fold_0/test/lc_index.csv}; EMB=${EMB:-emb_agn_rest}
+    TARGETS=${TARGETS:-m,e}; SUFFIX=_rest
 else
-    IDX=$ROOT/agn_test/fold_0/test/lc_index.csv; EMB=emb_agn; TARGETS=z,m,e; SUFFIX=
+    IDX=${IDX:-$ROOT/agn_test/fold_0/test/lc_index.csv}; EMB=${EMB:-emb_agn}
+    TARGETS=${TARGETS:-z,m,e}; SUFFIX=
 fi
 python fit_regressor.py --emb $EMB/*.npz --index $IDX --targets $TARGETS \
-    --out-dir agn_ridge$SUFFIX
+    --out-dir ${OUT:-agn_ridge$SUFFIX}
