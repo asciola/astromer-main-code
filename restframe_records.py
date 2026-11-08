@@ -34,7 +34,7 @@ Each lc_index.csv is copied with the dropped rows removed and three columns adde
   frame         "rest"
 mjd_min and mjd_max stay in the observed frame.
 
-Needs TensorFlow (the astromer conda env). Each shard is written to a temporary file
+Needs TensorFlow (the root uv env: source activate_env.sh). Each shard is written to a temporary file
 and renamed when complete, so an interrupted run never leaves a truncated shard;
 rerunning skips shards that already exist.
 

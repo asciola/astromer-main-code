@@ -56,8 +56,8 @@ TASK=${SLURM_ARRAY_TASK_ID:?"submit with sbatch --array=... (or set SLURM_ARRAY_
 # ----------------------------------------------------------------------------
 
 module purge
-source ~/anaconda3/etc/profile.d/conda.sh
-conda activate astromer
+# Activate the uv-managed environment (see pyproject.toml)
+source /n/home07/asciola/astromer-main-code/activate_env.sh
 export PYTHONUNBUFFERED=1
 
 mkdir -p "$OUTDIR" logs

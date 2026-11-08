@@ -20,7 +20,7 @@ one overlaps the one before it; when n is a multiple of W it repeats it), and a
 curve shorter than W is one window. The embedding of a curve is the plain mean over
 those windows, so wspan_<W> is the plain mean too.
 
-Needs TensorFlow only to read the records (the astromer conda env). Writes one row
+Needs TensorFlow only to read the records (the root uv env: source activate_env.sh). Writes one row
 per lcid; join to lc_index.csv on lcid. length_mass_gain.py --length wspan reads it.
 
     python lc_time_features.py --data data/records/agn_test/fold_0/test \\

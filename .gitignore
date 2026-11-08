@@ -26,3 +26,7 @@ data/alcock/
 cluster_results/*
 !cluster_results/*.sh
 !cluster_results/models.txt
+
+# uv-managed virtual environments
+.venv/
+envs/*/.venv/

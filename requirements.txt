@@ -1,13 +1,299 @@
-gdown
-tensorflow==2.14
-numpy<2.0
-notebook
-pandas
-scikit-learn
-joblib
+# GENERATED FILE -- do not edit by hand.
+#
+# The source of truth is pyproject.toml + uv.lock. This file is exported
+# from the lock so that 'pip install -r requirements.txt' still works for
+# anyone without uv. Regenerate after changing dependencies:
+#
+#   uv export --no-hashes --no-emit-project --format requirements.txt
+#
+# Requires Python 3.11 (TensorFlow 2.14 ships no wheels past cp311).
+#
+absl-py==2.5.1
+    # via
+    #   tensorboard
+    #   tensorflow
+astropy==6.1.7
+    # via
+    #   astromer-mhla
+    #   pyvo
+astropy-iers-data==0.2026.10.19.0.52.1
+    # via astropy
+astunparse==1.6.3
+    # via tensorflow
+beautifulsoup4==4.15.0
+    # via gdown
+certifi==2026.10.23
+    # via requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
+charset-normalizer==3.5.2
+    # via requests
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via tqdm
+contourpy==1.3.2
+    # via matplotlib
+cryptography==46.0.7
+    # via google-auth
+cycler==0.12.1
+    # via matplotlib
+filelock==4.1.0
+    # via
+    #   gdown
+    #   torch
+flatbuffers==25.12.19
+    # via tensorflow
+fonttools==4.65.0
+    # via matplotlib
+fsspec==2026.9.0
+    # via torch
+gast==0.7.0
+    # via tensorflow
+gdown==5.2.0
+    # via astromer-mhla
+google-api-core==2.30.3
+    # via google-api-python-client
+google-api-python-client==2.201.0
+    # via pydrive
+google-auth==2.62.1
+    # via
+    #   google-api-core
+    #   google-api-python-client
+    #   google-auth-httplib2
+    #   google-auth-oauthlib
+    #   tensorboard
+google-auth-httplib2==0.4.4
+    # via google-api-python-client
+google-auth-oauthlib==1.0.0
+    # via tensorboard
+google-pasta==0.2.0
+    # via tensorflow
+googleapis-common-protos==1.75.0
+    # via google-api-core
+grpcio==1.85.1
+    # via
+    #   tensorboard
+    #   tensorflow
+h5py==3.15.1
+    # via
+    #   astromer-mhla
+    #   tensorflow
+httplib2==0.32.1
+    # via
+    #   google-api-python-client
+    #   google-auth-httplib2
+    #   oauth2client
+idna==3.20
+    # via requests
+jinja2==3.1.6
+    # via torch
+joblib==1.5.2
+    # via
+    #   astromer-mhla
+    #   scikit-learn
+keras==2.14.0
+    # via tensorflow
+kiwisolver==1.5.1
+    # via matplotlib
+libclang==18.1.1
+    # via tensorflow
+markdown==3.10.3
+    # via tensorboard
+markupsafe==3.0.4
+    # via
+    #   jinja2
+    #   werkzeug
+matplotlib==3.10.7
+    # via
+    #   astromer-mhla
+    #   seaborn
+ml-dtypes==0.2.0
+    # via tensorflow
+mpmath==1.3.0
+    # via sympy
+networkx==3.4.2
+    # via torch
+numpy==1.26.4
+    # via
+    #   astromer-mhla
+    #   astropy
+    #   contourpy
+    #   h5py
+    #   matplotlib
+    #   ml-dtypes
+    #   pandas
+    #   pyerfa
+    #   scikit-learn
+    #   scipy
+    #   seaborn
+    #   tensorboard
+    #   tensorflow
+nvidia-cublas-cu11==11.11.3.6
+    # via
+    #   astromer-mhla
+    #   nvidia-cudnn-cu11
+    #   nvidia-cusolver-cu11
+nvidia-cuda-cupti-cu11==11.8.87
+    # via astromer-mhla
+nvidia-cuda-nvcc-cu11==11.8.89
+    # via astromer-mhla
+nvidia-cuda-runtime-cu11==11.8.89
+    # via astromer-mhla
+nvidia-cudnn-cu11==8.7.0.84
+    # via astromer-mhla
+nvidia-cufft-cu11==10.9.0.58
+    # via astromer-mhla
+nvidia-curand-cu11==10.3.0.86
+    # via astromer-mhla
+nvidia-cusolver-cu11==11.4.1.48
+    # via astromer-mhla
+nvidia-cusparse-cu11==11.7.5.86
+    # via astromer-mhla
+nvidia-nccl-cu11==2.16.5
+    # via astromer-mhla
+oauth2client==4.1.3
+    # via pydrive
+oauthlib==4.0.1
+    # via requests-oauthlib
+opt-einsum==3.4.0
+    # via tensorflow
+packaging==25.0
+    # via
+    #   astropy
+    #   matplotlib
+    #   tensorflow
+    #   wheel
+pandas==2.3.3
+    # via
+    #   astromer-mhla
+    #   seaborn
+pillow==12.3.0
+    # via matplotlib
 polars==0.20.10
-seaborn
-toml
-tqdm
-PyDrive
-pytest
+    # via astromer-mhla
+proto-plus==1.28.2
+    # via google-api-core
+protobuf==4.25.9
+    # via
+    #   google-api-core
+    #   googleapis-common-protos
+    #   proto-plus
+    #   tensorboard
+    #   tensorflow
+psutil==7.1.3
+    # via astromer-mhla
+pyarrow==22.0.0
+    # via astromer-mhla
+pyasn1==0.6.5
+    # via
+    #   oauth2client
+    #   pyasn1-modules
+    #   rsa
+pyasn1-modules==0.4.2
+    # via
+    #   google-auth
+    #   oauth2client
+pycparser==3.11 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
+pydrive==1.3.1
+    # via astromer-mhla
+pyerfa==2.0.1.5
+    # via astropy
+pyparsing==3.3.3
+    # via
+    #   httplib2
+    #   matplotlib
+pysocks==1.7.1
+    # via requests
+python-dateutil==3.0.0
+    # via
+    #   matplotlib
+    #   pandas
+pytz==2026.6
+    # via pandas
+pyvo==1.10.0
+    # via astromer-mhla
+pyyaml==6.0.2
+    # via
+    #   astromer-mhla
+    #   astropy
+    #   pydrive
+requests==2.34.2
+    # via
+    #   gdown
+    #   google-api-core
+    #   pyvo
+    #   requests-oauthlib
+    #   tensorboard
+requests-oauthlib==2.0.0
+    # via google-auth-oauthlib
+rsa==4.9.1
+    # via oauth2client
+scikit-learn==1.7.2
+    # via astromer-mhla
+scipy==1.15.3
+    # via
+    #   astromer-mhla
+    #   scikit-learn
+seaborn==0.13.2
+    # via astromer-mhla
+setuptools==81.0.0
+    # via
+    #   tensorboard
+    #   tensorflow
+    #   torch
+six==1.17.0
+    # via
+    #   astunparse
+    #   google-pasta
+    #   oauth2client
+    #   python-dateutil
+    #   tensorboard
+    #   tensorflow
+soupsieve==2.10
+    # via beautifulsoup4
+sympy==1.14.0
+    # via torch
+tensorboard==2.14.1
+    # via tensorflow
+tensorboard-data-server==0.7.2
+    # via tensorboard
+tensorflow==2.14.0
+    # via astromer-mhla
+tensorflow-estimator==2.14.0
+    # via tensorflow
+tensorflow-io-gcs-filesystem==0.37.1
+    # via tensorflow
+termcolor==3.3.0
+    # via tensorflow
+threadpoolctl==3.8.0
+    # via scikit-learn
+toml==0.10.2
+    # via astromer-mhla
+torch==2.11.0 ; sys_platform == 'darwin'
+    # via astromer-mhla
+torch==2.11.0+cpu ; sys_platform != 'darwin'
+    # via astromer-mhla
+tqdm==4.67.1
+    # via
+    #   astromer-mhla
+    #   gdown
+typing-extensions==4.16.0
+    # via
+    #   beautifulsoup4
+    #   grpcio
+    #   tensorflow
+    #   torch
+tzdata==2026.6
+    # via
+    #   pandas
+    #   python-dateutil
+uritemplate==4.2.0
+    # via google-api-python-client
+urllib3==2.8.0
+    # via requests
+werkzeug==3.1.9
+    # via tensorboard
+wheel==0.48.0
+    # via astunparse
+wrapt==1.14.2
+    # via tensorflow

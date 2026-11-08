@@ -9,7 +9,31 @@ A fork of **Astromer 2** (self-supervised transformer for astronomical light cur
 1. **Multi-Head Latent Attention (MHLA)**, an optional KV-compressed attention layer in the encoder.
 2. An **AGN/quasar regression study**: pretrain on ZTF light curves (`ztfsurvivors`), freeze the encoder, extract pooled embeddings for a held-out quasar set, and regress redshift (`z`), black-hole mass (`m`, LOGMBH), and Eddington ratio (`e`) with ridge or MLP heads. Models are compared across window size and latent size.
 
-There is no test suite, linter, or build step. Training and embedding extraction run on a SLURM GPU cluster (Harvard FASRC, `seas_gpu` partition, conda env `astromer`). The regression and plotting scripts run locally on cached `.npz`/`.csv` outputs.
+There is no test suite, linter, or build step. Training and embedding extraction run on a SLURM GPU cluster (Harvard FASRC, `seas_gpu` partition). The regression and plotting scripts run locally on cached `.npz`/`.csv` outputs.
+
+## Environments (uv, not conda)
+
+Dependencies are managed by **uv**. There are two environments, and they cannot be merged: TensorFlow 2.14 needs numpy<2 and CUDA 11, while the GPU torch build needs CUDA 12.
+
+| | project | venv | Python | for |
+|---|---|---|---|---|
+| **tf** (default) | `pyproject.toml` | `.venv` | 3.11 | pretraining, finetuning, embeddings, record conversion, plotting |
+| **agn** | `envs/agn-torch/pyproject.toml` | `envs/agn-torch/.venv` | 3.11 | `fit_regressor.py --model mlp` on a GPU |
+
+```bash
+uv sync                           # create/update the tf env
+uv sync --project envs/agn-torch  # create/update the agn env
+```
+
+In scripts, `source activate_env.sh` (optionally `source activate_env.sh agn`) replaces the old `conda activate` two-liner. Interactively, `uv run python ...` also works and syncs first.
+
+uv's cache and its downloaded interpreters are kept on lab storage (`UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, set by `activate_env.sh`) because `/n/home07` sits at its quota. Both are large and freely regenerable; never put them back in `$HOME`.
+
+**Python 3.11 is a ceiling, not a preference.** TensorFlow 2.14 publishes no wheels past cp311. Going to 3.12 would require TF >= 2.16, which is where `tf.keras` became Keras 3 -- and Keras 3 cannot reliably reload the existing `out.weights.h5` checkpoints (202 of them under `presentation/results`), because they were saved from subclassed `Model`s with custom `train_step`/`test_step`. Treat any Python bump past 3.11 as a TF/Keras-3 migration with a checkpoint-conversion step, not as an environment change.
+
+Relatedly, the CUDA 11 libraries are listed explicitly in `pyproject.toml` instead of using the `tensorflow[and-cuda]` extra. That extra forces `tensorrt==8.5.3.1`, which ships a **cp310-only** wheel and was the real thing pinning this project to Python 3.10. Nothing here calls TF-TRT, so it is dropped; TF prints a harmless "Could not find TensorRT" line at import. The nvidia-*-cu11 pins are exactly what the extra resolved to, so the GPU stack is unchanged.
+
+Add a dependency with `uv add <pkg>` (the tf env) or `uv add --project envs/agn-torch <pkg>`, then commit the changed `uv.lock`. `mlflow` and Jupyter are optional extras (`uv sync --extra notebook`), not part of the default install.
 
 ## Running code
 

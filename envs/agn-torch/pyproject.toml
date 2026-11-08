@@ -1,0 +1,41 @@
+# GPU regression environment (the old conda env `agn_torch`).
+#
+# This exists only to run fit_regressor.py's MLP head on a GPU. It is a
+# SEPARATE environment from the root one on purpose, and the two cannot be
+# merged: TensorFlow 2.14 requires numpy < 2 and ships CUDA 11 libraries,
+# while this torch build requires CUDA 12. fit_regressor.py needs no
+# TensorFlow (it only imports numpy / pandas / scikit-learn / torch), so
+# splitting costs nothing.
+#
+# Create it from the repo root:
+#   uv sync --project envs/agn-torch
+# and run with:
+#   uv run --project envs/agn-torch python fit_regressor.py ...
+# (run from the repo root so fit_regressor.py is on the path)
+
+[project]
+name = "agn-torch"
+version = "0.1.0"
+description = "GPU environment for the AGN regression heads (fit_regressor.py)"
+requires-python = "==3.11.*"
+
+dependencies = [
+    "torch==2.14.0",
+    "numpy==2.4.6",
+    "pandas==3.0.6",
+    "scikit-learn==1.9.1",
+    "scipy==1.17.1",
+    "joblib==1.6.0",
+]
+
+[tool.uv]
+package = false
+
+# CUDA 12.6 torch build, from PyTorch's own index.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }

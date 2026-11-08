@@ -47,9 +47,18 @@ Clone the repository and install the dependencies:
 ```bash
 git clone [https://github.com/astromer-science/astromer.git](https://github.com/astromer-science/astromer.git)
 cd astromer
-pip install -r requirements.txt
-
+uv sync
 ```
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/), which also
+downloads the correct Python. If you don't have it:
+`curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+`uv sync` creates `.venv` from the pinned `uv.lock`, including the CUDA
+libraries TensorFlow needs. Then either `source .venv/bin/activate` or prefix
+commands with `uv run`. See
+[`presentation/tutorials/installing.md`](presentation/tutorials/installing.md)
+for details, optional extras, and the second (GPU PyTorch) environment.
 
 ## 📘 Notebooks (`context/presentation/notebooks/`)
 

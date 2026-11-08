@@ -9,8 +9,8 @@
 
 # same environment setup as your other jobs, e.g.
 module purge
-source ~/anaconda3/etc/profile.d/conda.sh
-conda activate agn_torch
+# Activate the uv-managed environment (see pyproject.toml)
+source /n/home07/asciola/astromer-main-code/activate_env.sh agn
 export PYTHONUNBUFFERED=1
 
 # stop right away if PyTorch can't see the GPU, rather than silently

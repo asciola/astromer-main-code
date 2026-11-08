@@ -33,7 +33,7 @@ Extract embeddings from each D set with window-200 models (one window per curve)
 fit each set with fit_regressor.py --targets m,e; the KFold assignment depends only
 on the sources, which are identical across D, so the folds are paired too.
 
-Needs TensorFlow (the astromer conda env).
+Needs TensorFlow (the root uv env: source activate_env.sh).
 
     python restframe_windows.py --src data/records/agn_test_rest/fold_0/test \\
         --dst data/records/agn_rest_windows --durations 200 300 400

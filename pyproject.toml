@@ -1,0 +1,106 @@
+# Astromer 2 + Multi-Head Latent Attention (MHLA), AGN/quasar regression study.
+#
+# This is the TensorFlow environment (the old conda env `astromer`).
+# It is a "virtual" project: nothing here is installed as a package, because the
+# repo is imported from the root as namespace packages (`src...`,
+# `presentation.pipelines...`). Run everything from the repo root.
+#
+#   uv sync                 # create/update .venv
+#   uv run python -m presentation.pipelines.pipeline_0.pretrain --help
+#
+# The GPU regression env lives in envs/agn-torch/ (different Python, CUDA 12,
+# numpy 2.x -- it cannot share this environment).
+
+[project]
+name = "astromer-mhla"
+version = "0.1.0"
+description = "Astromer 2 with Multi-Head Latent Attention, plus an AGN/quasar regression study"
+readme = "README.md"
+# 3.11 is the ceiling: TensorFlow 2.14 publishes no wheels past cp311.
+# Going higher means TF >= 2.16, which is where tf.keras became Keras 3 --
+# that cannot reliably reload the 202 existing .weights.h5 checkpoints, which
+# were saved from subclassed Models with custom train_step/test_step.
+requires-python = "==3.11.*"
+
+dependencies = [
+    # --- core model stack -----------------------------------------------
+    "tensorflow==2.14.0",
+    # These are the CUDA 11 libraries that give TF its GPU, listed explicitly
+    # rather than via the tensorflow[and-cuda] extra. That extra also forces
+    # tensorrt==8.5.3.1, which publishes a cp310 wheel ONLY -- it is what
+    # pinned this project to Python 3.10. TensorRT is used solely by TF-TRT
+    # (tf.experimental.tensorrt), which nothing in this repo calls, so
+    # dropping it costs nothing but a "Could not find TensorRT" warning at
+    # import. Versions are exactly what tensorflow[and-cuda]==2.14.0 resolves
+    # to, so the GPU stack is unchanged.
+    "nvidia-cublas-cu11==11.11.3.6",
+    "nvidia-cuda-cupti-cu11==11.8.87",
+    "nvidia-cuda-nvcc-cu11==11.8.89",
+    "nvidia-cuda-runtime-cu11==11.8.89",
+    "nvidia-cudnn-cu11==8.7.0.84",
+    "nvidia-cufft-cu11==10.9.0.58",
+    "nvidia-curand-cu11==10.3.0.86",
+    "nvidia-cusolver-cu11==11.4.1.48",
+    "nvidia-cusparse-cu11==11.7.5.86",
+    "nvidia-nccl-cu11==2.16.5",
+    # TF 2.14 cannot run on numpy 2.x.
+    "numpy==1.26.4",
+    # CPU build only: this is imported before TF to read WebDataset .tar.gz
+    # shards (src/data/loaders.py), never to compute. The GPU torch build
+    # ships CUDA 12 libs that clash with TF's CUDA 11 ones.
+    "torch==2.11.0",
+
+    # --- data / analysis ------------------------------------------------
+    "pandas==2.3.3",
+    "scipy==1.15.3",
+    "scikit-learn==1.7.2",
+    "joblib==1.5.2",
+    "polars==0.20.10",
+    "pyarrow==22.0.0",
+    "h5py==3.15.1",
+    "toml==0.10.2",
+    "pyyaml==6.0.2",
+    "tqdm==4.67.1",
+    "psutil==7.1.3",
+
+    # --- plotting -------------------------------------------------------
+    "matplotlib==3.10.7",
+    "seaborn==0.13.2",
+
+    # --- catalog crossmatching (crossmatch_labels.py, survivor_overlap.py)
+    # These were only ever in the conda `base` env, so those scripts needed a
+    # different interpreter. Folding them in makes one env run everything.
+    # astropy 7 requires Python >= 3.11, hence the <7 bound.
+    "astropy>=6.1,<7",
+    "pyvo>=1.5",
+
+    # --- dataset download (data/get_data.sh calls the `gdown` CLI) --------
+    "gdown==5.2.0",
+    "pydrive==1.3.1",
+]
+
+[project.optional-dependencies]
+# Jupyter: not needed for cluster jobs.  uv sync --extra notebook
+notebook = [
+    "notebook==7.4.7",
+    "jupyterlab==4.4.10",
+]
+# presentation/pipelines/utils.py imports mlflow, but nothing imports that
+# module -- it is dead code, and mlflow was already broken (import failed) in
+# the conda env. Kept available, but out of the default install: it pulls in
+# ~50 packages (flask, gunicorn, alembic, sqlalchemy, docker, fastapi, ...).
+mlflow = ["mlflow==3.6.0"]
+dev = ["pytest>=8"]
+
+[tool.uv]
+# Do not try to build/install this repo as a distribution; only manage deps.
+package = false
+
+# The CPU torch build is not on PyPI; it comes from PyTorch's own index.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
