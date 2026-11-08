@@ -3,9 +3,15 @@
 # window each, at several rest-frame durations (see restframe_windows.py), embedded
 # by every window-200 model and fitted for m and e (see plot_rest_duration.py).
 #
-# Run on a LOGIN node, from the directory you normally submit from (the one with
-# fit_regressor.py, extract_embeddings.py, presentation/results and agn_tune/):
+# Run on a LOGIN node, from anywhere:
 #     bash path/to/run_rest_duration.sh
+# Everything it runs, and every job it submits (they inherit its directory), uses
+# paths relative to the directory holding fit_regressor.py, extract_embeddings.py,
+# restframe_windows.py, presentation/results and agn_tune/ -- the repo root. It
+# changes to that directory itself: the current directory if it qualifies, else the
+# parent of this script's directory (the repo root when this lives in
+# cluster_results/), else this script's directory. Outputs (models_w200.txt,
+# logs/, emb_rw*/, agn_*_rw*/) land there.
 # It sources activate_env.sh (the uv TF env) itself; nothing needs activating first.
 # It
 #   1. writes $ROOT/agn_rest_windows/D<days>/ with restframe_windows.py (skipped if
@@ -31,10 +37,27 @@ source "$ACTIVATE" tf        # explicit arg: a bare source would pass on this sc
 set -u
 
 ROOT=${ROOT:-/n/holylabs/protopapas_lab/Lab/asciola/data}
+[[ "$ROOT" == /* ]] || ROOT=$PWD/$ROOT                  # still valid after the cd below
 DURATIONS=${DURATIONS:-"200 300 400"}
 WIN=$ROOT/agn_rest_windows
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)     # where the run_*.sh scripts are
 read -r -a DS <<< "$DURATIONS"
+
+# ---- 0. work from the repo root --------------------------------------------------
+NEED=(fit_regressor.py extract_embeddings.py restframe_windows.py presentation/results
+      agn_tune/mlp_config.json)
+has_all() { local f; for f in "${NEED[@]}"; do [[ -e "$1/$f" ]] || return 1; done; }
+for d in "$PWD" "$HERE/.." "$HERE"; do
+    if has_all "$d"; then cd "$d"; break; fi
+done
+if ! has_all .; then
+    GUESS=$(cd "$HERE/.." && pwd)
+    echo "no directory has all of: ${NEED[*]}" >&2
+    echo "(looked in $PWD, $GUESS and $HERE). Missing from $GUESS:" >&2
+    for f in "${NEED[@]}"; do [[ -e "$GUESS/$f" ]] || echo "  $f" >&2; done
+    exit 1
+fi
+echo "working in $PWD"
 
 submit() {   # sbatch, or print it under DRY_RUN; echoes the job id
     if [[ "${DRY_RUN:-0}" == "1" ]]; then
