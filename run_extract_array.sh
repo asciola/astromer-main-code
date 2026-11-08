@@ -42,11 +42,6 @@ POOL=${POOL:-last}
 BS=${BS:-128}
 TASK=${SLURM_ARRAY_TASK_ID:?"submit with sbatch --array=... (or set SLURM_ARRAY_TASK_ID)"}
 
-# --- environment: edit to match how you normally run the TF code ------------
-# module load python/3.10 cuda/12.2 cudnn
-# source activate astromer
-# ----------------------------------------------------------------------------
-
 module purge
 # Activate the uv-managed environment (see pyproject.toml)
 source /n/home07/asciola/astromer-main-code/activate_env.sh

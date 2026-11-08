@@ -4,9 +4,9 @@
 # by every window-200 model and fitted for m and e (see plot_rest_duration.py).
 #
 # Run on a LOGIN node, from the directory you normally submit from (the one with
-# fit_regressor.py, extract_embeddings.py, presentation/results and agn_tune/), with
-# the astromer conda env active:
+# fit_regressor.py, extract_embeddings.py, presentation/results and agn_tune/):
 #     bash path/to/run_rest_duration.sh
+# It sources activate_env.sh (the uv TF env) itself; nothing needs activating first.
 # It
 #   1. writes $ROOT/agn_rest_windows/D<days>/ with restframe_windows.py (skipped if
 #      the last duration's lc_index.csv already exists; needs the rest-frame records
@@ -21,7 +21,14 @@
 #   ROOT       data root            (default /n/holylabs/protopapas_lab/Lab/asciola/data)
 #   DURATIONS  rest-frame days      (default "200 300 400")
 #   DRY_RUN=1  print the sbatch commands instead of submitting
+#   ACTIVATE   env script to source (default /n/home07/asciola/astromer-main-code/activate_env.sh)
 set -euo pipefail
+
+ACTIVATE=${ACTIVATE:-/n/home07/asciola/astromer-main-code/activate_env.sh}
+set +u                       # venv activate scripts are not nounset-clean
+# shellcheck disable=SC1090
+source "$ACTIVATE" tf        # explicit arg: a bare source would pass on this script's $1
+set -u
 
 ROOT=${ROOT:-/n/holylabs/protopapas_lab/Lab/asciola/data}
 DURATIONS=${DURATIONS:-"200 300 400"}
@@ -41,14 +48,15 @@ submit() {   # sbatch, or print it under DRY_RUN; echoes the job id
 # ---- 1. window sets ------------------------------------------------------------
 if [[ ! -s "$WIN/D${DS[${#DS[@]}-1]}/fold_0/test/lc_index.csv" ]]; then
     python -c "import tensorflow" 2>/dev/null \
-        || { echo "activate the astromer env first (needs TensorFlow)" >&2; exit 1; }
+        || { echo "no TensorFlow after sourcing $ACTIVATE; run 'uv sync' in the repo" >&2; exit 1; }
     python restframe_windows.py --src "$ROOT/agn_test_rest/fold_0/test" --dst "$WIN" \
         --durations "${DS[@]}"
 fi
 
 # ---- 2. window-200 models ------------------------------------------------------
 find presentation/results -type d -name pretraining \
-    | grep -E '(_K_01_[0-9]+_200|_base_[0-9]+_200_K_baseline)/' | sort > models_w200.txt
+    | { grep -E '(_K_01_[0-9]+_200|_base_[0-9]+_200_K_baseline)/' || true; } \
+    | sort > models_w200.txt   # no match must reach the check below, not trip pipefail
 N=$(wc -l < models_w200.txt)
 if ! grep -q '_base_[0-9]*_200_K_baseline/' models_w200.txt; then
     echo "no window-200 standard-attention model in presentation/results" >&2
@@ -73,6 +81,6 @@ done
 
 runs() { for D in "${DS[@]}"; do printf ' %s:agn_%s_rw%s/predictions.csv' "$D" "$1" "$D"; done; }
 echo
-echo "when the fits are done:"
+echo "when the fits are done (in a shell where you ran: source $ACTIVATE):"
 echo "  python plot_rest_duration.py --runs$(runs mlp) --head mlp --out-dir rest_duration"
 echo "  python plot_rest_duration.py --runs$(runs ridge) --head ridge --out-dir rest_duration"
