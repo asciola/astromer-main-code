@@ -18,6 +18,7 @@
 #      the last duration's lc_index.csv already exists; needs the rest-frame records
 #      from restframe_records.py in $ROOT/agn_test_rest),
 #   2. lists the window-200 models (MHLA and standard attention) in models_w200.txt,
+#      one per experiment: its latest trial dir that has out.weights.h5,
 #   3. for every duration submits an extraction array into emb_rw<days>/ and, once
 #      the whole array has succeeded, a ridge fit (agn_ridge_rw<days>/) and an MLP
 #      fit (agn_mlp_rw<days>/), both with --targets m,e.
@@ -77,14 +78,21 @@ if [[ ! -s "$WIN/D${DS[${#DS[@]}-1]}/fold_0/test/lc_index.csv" ]]; then
 fi
 
 # ---- 2. window-200 models ------------------------------------------------------
-find presentation/results -type d -name pretraining \
+# One line per EXPERIMENT: <exp>/<timestamp>/pretraining dirs that hold weights
+# (a resumed run leaves its earlier trial dirs behind, some without
+# out.weights.h5), and of those the latest timestamp. Paths sort by timestamp
+# within an experiment, so awk keeps the last one seen.
+find presentation/results -path '*/pretraining/out.weights.h5' \
+    | sed 's#/out\.weights\.h5$##' \
     | { grep -E '(_K_01_[0-9]+_200|_base_[0-9]+_200_K_baseline)/' || true; } \
+    | sort | awk -F/ '{ last[$(NF-2)] = $0 } END { for (e in last) print last[e] }' \
     | sort > models_w200.txt   # no match must reach the check below, not trip pipefail
 N=$(wc -l < models_w200.txt)
 if ! grep -q '_base_[0-9]*_200_K_baseline/' models_w200.txt; then
-    echo "no window-200 standard-attention model in presentation/results" >&2
+    echo "no window-200 standard-attention model (with out.weights.h5) in presentation/results" >&2
     exit 1
 fi
+echo "standard attention: $(grep '_base_[0-9]*_200_K_baseline/' models_w200.txt)"
 echo "models_w200.txt: $N window-200 models"
 mkdir -p logs
 

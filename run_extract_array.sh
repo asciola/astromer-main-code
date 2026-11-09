@@ -64,8 +64,13 @@ EXP=$(basename "$(dirname "$(dirname "$PT")")")
 [[ "$EXP" == "." || "$EXP" == "/" || -z "$EXP" ]] && EXP=$(basename "$PT")
 OUT="$OUTDIR/emb_$(printf '%03d' "$TASK")_${EXP}.npz"
 
-if [[ -s "$OUT" ]]; then
-    echo "task $TASK: $OUT exists, skipping"
+# skip if this EXPERIMENT is already done under any task index: indices shift
+# whenever the model list changes, and a duplicate would be fitted twice
+shopt -s nullglob
+DONE=("$OUTDIR"/emb_[0-9][0-9][0-9]_"$EXP".npz)
+shopt -u nullglob
+if (( ${#DONE[@]} )) && [[ -s "${DONE[0]}" ]]; then
+    echo "task $TASK: ${DONE[0]} exists, skipping"
     exit 0
 fi
 
@@ -73,6 +78,7 @@ CMD=(python -m extract_embeddings --pt-model "$PT" --data "$DATA" --subset test
      --pool "$POOL" --bs "$BS" --gpu "${CUDA_VISIBLE_DEVICES:-0}" --out "$OUT.tmp.npz")
 
 echo "task $TASK  model $PT"
+echo "  host $(hostname)  GPU $(nvidia-smi --query-gpu=name,uuid --format=csv,noheader 2>/dev/null | tr '\n' ' ')"
 echo "  -> $OUT"
 echo "  ${CMD[*]}"
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
