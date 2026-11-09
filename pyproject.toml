@@ -25,6 +25,11 @@ requires-python = "==3.11.*"
 dependencies = [
     # --- core model stack -----------------------------------------------
     "tensorflow==2.14.0",
+    # On Apple Silicon the tensorflow 2.14 wheel is an empty shim whose only
+    # job is to require tensorflow-macos, where the real code lives. uv takes
+    # one wheel's metadata (Linux's) for the whole version, so it never sees
+    # that requirement and installs a tensorflow with no tensorflow module.
+    "tensorflow-macos==2.14.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # These are the CUDA 11 libraries that give TF its GPU, listed explicitly
     # rather than via the tensorflow[and-cuda] extra. That extra also forces
     # tensorrt==8.5.3.1, which publishes a cp310 wheel ONLY -- it is what
@@ -32,17 +37,18 @@ dependencies = [
     # (tf.experimental.tensorrt), which nothing in this repo calls, so
     # dropping it costs nothing but a "Could not find TensorRT" warning at
     # import. Versions are exactly what tensorflow[and-cuda]==2.14.0 resolves
-    # to, so the GPU stack is unchanged.
-    "nvidia-cublas-cu11==11.11.3.6",
-    "nvidia-cuda-cupti-cu11==11.8.87",
-    "nvidia-cuda-nvcc-cu11==11.8.89",
-    "nvidia-cuda-runtime-cu11==11.8.89",
-    "nvidia-cudnn-cu11==8.7.0.84",
-    "nvidia-cufft-cu11==10.9.0.58",
-    "nvidia-curand-cu11==10.3.0.86",
-    "nvidia-cusolver-cu11==11.4.1.48",
-    "nvidia-cusparse-cu11==11.7.5.86",
-    "nvidia-nccl-cu11==2.16.5",
+    # to, so the GPU stack is unchanged. Linux only: NVIDIA publishes no macOS
+    # wheels, and TF has no CUDA there anyway, so a Mac gets a CPU-only TF.
+    "nvidia-cublas-cu11==11.11.3.6; sys_platform == 'linux'",
+    "nvidia-cuda-cupti-cu11==11.8.87; sys_platform == 'linux'",
+    "nvidia-cuda-nvcc-cu11==11.8.89; sys_platform == 'linux'",
+    "nvidia-cuda-runtime-cu11==11.8.89; sys_platform == 'linux'",
+    "nvidia-cudnn-cu11==8.7.0.84; sys_platform == 'linux'",
+    "nvidia-cufft-cu11==10.9.0.58; sys_platform == 'linux'",
+    "nvidia-curand-cu11==10.3.0.86; sys_platform == 'linux'",
+    "nvidia-cusolver-cu11==11.4.1.48; sys_platform == 'linux'",
+    "nvidia-cusparse-cu11==11.7.5.86; sys_platform == 'linux'",
+    "nvidia-nccl-cu11==2.16.5; sys_platform == 'linux'",
     # TF 2.14 cannot run on numpy 2.x.
     "numpy==1.26.4",
     # CPU build only: this is imported before TF to read WebDataset .tar.gz

@@ -12,6 +12,7 @@ absl-py==2.5.1
     # via
     #   tensorboard
     #   tensorflow
+    #   tensorflow-macos
 astropy==6.1.7
     # via
     #   astromer-mhla
@@ -19,7 +20,9 @@ astropy==6.1.7
 astropy-iers-data==0.2026.10.19.0.52.1
     # via astropy
 astunparse==1.6.3
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 beautifulsoup4==4.15.0
     # via gdown
 certifi==2026.10.23
@@ -41,13 +44,17 @@ filelock==4.1.0
     #   gdown
     #   torch
 flatbuffers==25.12.19
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 fonttools==4.65.0
     # via matplotlib
 fsspec==2026.9.0
     # via torch
 gast==0.7.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 gdown==5.2.0
     # via astromer-mhla
 google-api-core==2.30.3
@@ -66,17 +73,21 @@ google-auth-httplib2==0.4.4
 google-auth-oauthlib==1.0.0
     # via tensorboard
 google-pasta==0.2.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 googleapis-common-protos==1.75.0
     # via google-api-core
 grpcio==1.85.1
     # via
     #   tensorboard
     #   tensorflow
+    #   tensorflow-macos
 h5py==3.15.1
     # via
     #   astromer-mhla
     #   tensorflow
+    #   tensorflow-macos
 httplib2==0.32.1
     # via
     #   google-api-python-client
@@ -91,11 +102,15 @@ joblib==1.5.2
     #   astromer-mhla
     #   scikit-learn
 keras==2.14.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 kiwisolver==1.5.1
     # via matplotlib
 libclang==18.1.1
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 markdown==3.10.3
     # via tensorboard
 markupsafe==3.0.4
@@ -107,7 +122,9 @@ matplotlib==3.10.7
     #   astromer-mhla
     #   seaborn
 ml-dtypes==0.2.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 mpmath==1.3.0
     # via sympy
 networkx==3.4.2
@@ -127,40 +144,44 @@ numpy==1.26.4
     #   seaborn
     #   tensorboard
     #   tensorflow
-nvidia-cublas-cu11==11.11.3.6
+    #   tensorflow-macos
+nvidia-cublas-cu11==11.11.3.6 ; sys_platform == 'linux'
     # via
     #   astromer-mhla
     #   nvidia-cudnn-cu11
     #   nvidia-cusolver-cu11
-nvidia-cuda-cupti-cu11==11.8.87
+nvidia-cuda-cupti-cu11==11.8.87 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-cuda-nvcc-cu11==11.8.89
+nvidia-cuda-nvcc-cu11==11.8.89 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-cuda-runtime-cu11==11.8.89
+nvidia-cuda-runtime-cu11==11.8.89 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-cudnn-cu11==8.7.0.84
+nvidia-cudnn-cu11==8.7.0.84 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-cufft-cu11==10.9.0.58
+nvidia-cufft-cu11==10.9.0.58 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-curand-cu11==10.3.0.86
+nvidia-curand-cu11==10.3.0.86 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-cusolver-cu11==11.4.1.48
+nvidia-cusolver-cu11==11.4.1.48 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-cusparse-cu11==11.7.5.86
+nvidia-cusparse-cu11==11.7.5.86 ; sys_platform == 'linux'
     # via astromer-mhla
-nvidia-nccl-cu11==2.16.5
+nvidia-nccl-cu11==2.16.5 ; sys_platform == 'linux'
     # via astromer-mhla
 oauth2client==4.1.3
     # via pydrive
 oauthlib==4.0.1
     # via requests-oauthlib
 opt-einsum==3.4.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 packaging==25.0
     # via
     #   astropy
     #   matplotlib
     #   tensorflow
+    #   tensorflow-macos
     #   wheel
 pandas==2.3.3
     # via
@@ -179,6 +200,7 @@ protobuf==4.25.9
     #   proto-plus
     #   tensorboard
     #   tensorflow
+    #   tensorflow-macos
 psutil==7.1.3
     # via astromer-mhla
 pyarrow==22.0.0
@@ -240,6 +262,7 @@ setuptools==81.0.0
     # via
     #   tensorboard
     #   tensorflow
+    #   tensorflow-macos
     #   torch
 six==1.17.0
     # via
@@ -249,22 +272,33 @@ six==1.17.0
     #   python-dateutil
     #   tensorboard
     #   tensorflow
+    #   tensorflow-macos
 soupsieve==2.10
     # via beautifulsoup4
 sympy==1.14.0
     # via torch
 tensorboard==2.14.1
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 tensorboard-data-server==0.7.2
     # via tensorboard
 tensorflow==2.14.0
     # via astromer-mhla
 tensorflow-estimator==2.14.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 tensorflow-io-gcs-filesystem==0.37.1
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
+tensorflow-macos==2.14.0 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+    # via astromer-mhla
 termcolor==3.3.0
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
 threadpoolctl==3.8.0
     # via scikit-learn
 toml==0.10.2
@@ -282,6 +316,7 @@ typing-extensions==4.16.0
     #   beautifulsoup4
     #   grpcio
     #   tensorflow
+    #   tensorflow-macos
     #   torch
 tzdata==2026.6
     # via
@@ -296,4 +331,6 @@ werkzeug==3.1.9
 wheel==0.48.0
     # via astunparse
 wrapt==1.14.2
-    # via tensorflow
+    # via
+    #   tensorflow
+    #   tensorflow-macos
