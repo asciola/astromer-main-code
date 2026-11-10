@@ -24,7 +24,14 @@ objects.csv / metadata parquet to infer a class count, and it replaces the outpu
 dict with one-hot labels, which would discard the lcid we need for joining.
 
 Light curves longer than window_size produce several windows; their embeddings
-are averaged into a single vector per lcid.
+are averaged into a single vector per lcid, each distinct window once.
+get_windows (src/data/preprocessing.py, sampling=False) starts windows at 0, W,
+2W, ... floor(n/W)*W and clamps each start to n-W, so when n is an exact multiple
+of W the last window is a copy of the one before it: a 400-point curve at W=200
+gives [0:200], [200:400], [200:400]. A plain mean would then weight the second
+half 2/3. Here a window identical to the previous one of the same lcid is skipped.
+(Embeddings written before this fix carry that weighting for curves with
+n = kW, k >= 2, about 1 in W natural curves; single-window curves are unaffected.)
 
 Usage:
     python -m extract_embeddings \\
@@ -35,6 +42,7 @@ Usage:
         --out emb_ws200.npz
 """
 import argparse
+import hashlib
 import os
 import sys
 from collections import defaultdict
@@ -147,7 +155,8 @@ def extract(pt_dir, data_path, subset, bs, pool, normalize='zero-mean',
 
     sums = defaultdict(lambda: None)
     counts = defaultdict(int)
-    n_windows = 0
+    last = {}                   # lcid -> fingerprint of its previous window
+    n_windows = n_dup = 0
     for inputs, outputs in loader:
         # KV-cache models (use_kv_cache=True) accumulate state across calls;
         # clear it every batch so memory does not grow without bound.
@@ -155,7 +164,16 @@ def extract(pt_dir, data_path, subset, bs, pool, normalize='zero-mean',
             encoder.reset_caches()
         emb = extractor(inputs, training=False).numpy()
         lcids = [x.decode() for x in outputs['lcid'].numpy().ravel()]
-        for lcid, vec in zip(lcids, emb):
+        t_in = inputs['times'].numpy()
+        x_in = inputs['input'].numpy()
+        for i, (lcid, vec) in enumerate(zip(lcids, emb)):
+            # a 16-byte digest, not the bytes: 507k curves x 8 kB at W=1000 is 4 GB
+            fp = hashlib.blake2b(t_in[i].tobytes() + x_in[i].tobytes(),
+                                 digest_size=16).digest()
+            if last.get(lcid) == fp:        # the clamped repeat of the last window
+                n_dup += 1
+                continue
+            last[lcid] = fp
             if sums[lcid] is None:
                 sums[lcid] = vec.astype(np.float64).copy()
             else:
@@ -170,7 +188,8 @@ def extract(pt_dir, data_path, subset, bs, pool, normalize='zero-mean',
     X = np.stack([sums[k] / counts[k] for k in lcid_list]).astype(np.float32)
     W = np.array([counts[k] for k in lcid_list], dtype=np.int32)
     print(f'[INFO] {n_windows:,} windows -> {len(lcid_list):,} light curves '
-          f'(mean {W.mean():.2f} windows/curve)', flush=True)
+          f'(mean {W.mean():.2f} windows/curve; {n_dup:,} repeated windows skipped)',
+          flush=True)
     return lcid_list, X, W, cfg
 
 
