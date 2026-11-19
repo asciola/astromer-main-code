@@ -56,7 +56,8 @@ ACCENT, ACCENT2 = "#0E8C7E", "#A06A00"
 DENSITY = LinearSegmentedColormap.from_list("density", ["#F1F3F3", "#C9D0CF", "#8E9998", "#4A5554"])
 HEX_MIN_N = 3000        # below this, a scatter is still readable
 
-TARGET_LABEL = {"m": r"$\log M_{\rm BH}$", "z": r"$z$", "e": r"$\log\,L/L_{\rm Edd}$"}
+TARGET_LABEL = {"m": r"$\log M_{\rm BH}$", "z": r"$z$", "e": r"$\log\,L/L_{\rm Edd}$",
+                "mz": r"$\log[M_{\rm BH}/(1+z)^2]$"}
 
 
 def r2(y, p):
