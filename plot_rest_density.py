@@ -15,7 +15,7 @@ averaged), and every encoder in the run is scored against it:
     R^2(encoder) - R^2(standard attention, window 200)      > 0 = beats it
 
 Window-200 encoders (blue) appear in every cell; window-400 encoders (orange),
-including standard attention at 400, wherever they were run (the 400-point cell).
+including standard attention at 400, wherever they were run (both 600-day cells).
 One figure, rows = targets (default m, e), columns = cells; x = attention type and
 latent size. Error bars are 95% paired bootstrap intervals over sources: one set of
 draws is shared by every model and cell, so comparisons between cells are paired
@@ -26,8 +26,11 @@ differences between cells for the encoders that ran in both:
   time       p400_d600    - p200_d300      twice the time, same density
   density    p400_d600    - p400_d600_t2   twice the density, same time
   thinned    p400_d600_t2 - p200_d300      twice the time, half the density
-(a window-200 encoder on p400_d600 sees two windows; there, "time" and "density"
-also change how many windows it averages). Writes rest_density_<head>.png,
+A window-200 encoder sees p400_d600 as two 300-day windows, averaged, but
+p400_d600_t2 as one 600-day window, so for it "time" and "density" also change the
+window span and how many windows it averages. A window-400 encoder sees both 600-day
+cells as one 600-day window (p400_d600_t2 padded from 200 to 400 points), so its
+"density" difference is density alone. Writes rest_density_<head>.png,
 rest_density_<head>.csv (every model x cell x target) and
 rest_density_<head>_contrasts.csv.
 
@@ -55,7 +58,8 @@ TLABEL = {"m": r"$\log M_{\rm BH}$", "e": r"$\log L/L_{\rm Edd}$", "z": "redshif
 WIN_COLOR = {200: "#2a78d6", 400: "#eb6834"}          # categorical slots 1 and 2
 CELL_RE = re.compile(r"p(\d+)_d(\d+)(?:_t(\d+))?$")
 CONTRASTS = [("time", "p400_d600", "p200_d300", "2x the time, same density"),
-             ("density", "p400_d600", "p400_d600_t2", "2x the density, same time"),
+             ("density", "p400_d600", "p400_d600_t2",
+              "2x the density, same time; density alone only at window 400"),
              ("thinned", "p400_d600_t2", "p200_d300", "2x the time, half the density")]
 
 

@@ -4,10 +4,14 @@
 #   p200_d300      200 points over 300 rest-frame days (contiguous)
 #   p400_d600      400 points over 600 days (contiguous): same density, twice the time
 #   p400_d600_t2   those 400 points thinned to every 2nd: same time, half the density
-# Every set is embedded by every window-200 model; the 400-point set also by every
+# Every set is embedded by every window-200 model; both 600-day sets also by every
 # window-400 model. Standard attention at window 200 is the reference in all three,
 # so on p400_d600 it embeds the 400 points as two 200-point windows, averaged (each
 # once: extract_embeddings.py skips the clamped repeat get_windows produces).
+# A window-200 model therefore sees p400_d600 as two 300-day windows but
+# p400_d600_t2 as one 600-day window, so for it "density" also changes the window
+# span. A window-400 model sees both as one 600-day window (p400_d600_t2 padded
+# from 200 to 400 points), so for it p400_d600 - p400_d600_t2 is density alone.
 # Each set is then fitted for m and e with ridge and the MLP.
 #
 # Run on a LOGIN node, from anywhere:
@@ -24,7 +28,10 @@
 #   2. lists the window-200 and window-400 models, one per experiment (its latest
 #      trial dir that has out.weights.h5),
 #   3. per cell submits an extraction array and, once it has fully succeeded, a
-#      ridge and an MLP fit with --targets m,e.
+#      ridge and an MLP fit with --targets m,e. A cell is skipped when every model
+#      in its list has its .npz and both predictions.csv are newer than all of them;
+#      when only the fits are stale, they are submitted without an extraction array.
+#      So rerunning after adding models redoes only what they change.
 #
 # Overrides (environment):
 #   ROOT       data root            (default /n/holylabs/protopapas_lab/Lab/asciola/data)
@@ -45,7 +52,7 @@ CELLDIR=$ROOT/agn_rest_cells
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)     # where the run_*.sh scripts are
 SPECS=(200@300 400@600 400@600/2)                      # restframe_windows.py --cells
 CELLS=(p200_d300 p400_d600 p400_d600_t2)               # the directories they become
-CELL_MODELS=(models_w200.txt models_w200_400.txt models_w200.txt)
+CELL_MODELS=(models_w200.txt models_w200_400.txt models_w200_400.txt)
 
 # ---- 0. work from the repo root --------------------------------------------------
 NEED=(fit_regressor.py extract_embeddings.py restframe_windows.py presentation/results
@@ -110,18 +117,49 @@ cat models_w200.txt models_w400.txt > models_w200_400.txt
 mkdir -p logs
 
 # ---- 3. extraction, then fits, per cell ----------------------------------------
+missing_emb() {   # model list, embedding dir: how many models have no .npz there
+    local pt exp n=0
+    shopt -s nullglob
+    while read -r pt; do
+        exp=$(basename "$(dirname "$(dirname "$pt")")")   # <exp>/<timestamp>/pretraining
+        local hit=("$2"/emb_[0-9][0-9][0-9]_"$exp".npz)
+        (( ${#hit[@]} )) && [[ -s "${hit[0]}" ]] || n=$((n + 1))
+    done < "$1"
+    shopt -u nullglob
+    echo $n
+}
+fits_current() {  # embedding dir, predictions.csv files: each exists, newer than every .npz
+    local e=$1 f; shift
+    for f in "$@"; do
+        [[ -s "$f" ]] || return 1
+        [[ -z "$(find "$e" -name 'emb_*.npz' -newer "$f" -print -quit)" ]] || return 1
+    done
+}
 for k in "${!CELLS[@]}"; do
     C=${CELLS[$k]}; M=${CELL_MODELS[$k]}; N=$(wc -l < "$M" | tr -d " ")
     IDXC=$CELLDIR/$C/fold_0/test/lc_index.csv
-    EXT=$(submit --array=0-$((N - 1)) \
-        --export=ALL,MODELS=$M,DATA=$CELLDIR/$C/fold_0,OUTDIR=emb_rc_$C \
-        "$HERE/run_extract_array.sh")
+    TODO=$(missing_emb "$M" "emb_rc_$C")
+    if (( TODO == 0 )) && fits_current "emb_rc_$C" \
+            "agn_ridge_rc_$C/predictions.csv" "agn_mlp_rc_$C/predictions.csv"; then
+        echo "$C ($N models): embeddings and fits up to date, skipped"
+        continue
+    fi
+    DEP=()
+    if (( TODO > 0 )); then
+        # the whole array: tasks whose experiment is done exit within seconds
+        EXT=$(submit --array=0-$((N - 1)) \
+            --export=ALL,MODELS=$M,DATA=$CELLDIR/$C/fold_0,OUTDIR=emb_rc_$C \
+            "$HERE/run_extract_array.sh")
+        DEP=(--dependency=afterok:$EXT)
+    else
+        EXT="none needed"
+    fi
     # IDX/EMB/TARGETS/OUT go through the environment: --export splits on commas
     RID=$(IDX=$IDXC EMB=emb_rc_$C TARGETS=m,e OUT=agn_ridge_rc_$C \
-        submit --dependency=afterok:$EXT --export=ALL "$HERE/run_ridge.sh")
+        submit ${DEP[@]+"${DEP[@]}"} --export=ALL "$HERE/run_ridge.sh")
     MLP=$(IDX=$IDXC EMB=emb_rc_$C TARGETS=m,e OUT=agn_mlp_rc_$C \
-        submit --dependency=afterok:$EXT --export=ALL "$HERE/run_agn_mlp.sh")
-    echo "$C ($N models): extraction $EXT -> ridge $RID, mlp $MLP"
+        submit ${DEP[@]+"${DEP[@]}"} --export=ALL "$HERE/run_agn_mlp.sh")
+    echo "$C ($N models, $TODO to embed): extraction $EXT -> ridge $RID, mlp $MLP"
 done
 
 runs() { for C in "${CELLS[@]}"; do printf ' %s:agn_%s_rc_%s/predictions.csv' "$C" "$1" "$C"; done; }
