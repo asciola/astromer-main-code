@@ -60,6 +60,14 @@ TARGET_LABEL = {"m": r"$\log M_{\rm BH}$", "z": r"$z$", "e": r"$\log\,L/L_{\rm E
                 "mz": r"$\log[M_{\rm BH}/(1+z)^2]$", "mz3": r"$\log[M_{\rm BH}/(1+z)^3]$"}
 
 
+def target_label(t):
+    """Axis label for a target key; mz<k> (e.g. mz4.6) = log[M_BH / (1+z)^k]."""
+    if t in TARGET_LABEL:
+        return TARGET_LABEL[t]
+    m = re.fullmatch(r"mz([0-9.]+)", t)
+    return rf"$\log[M_{{\rm BH}}/(1+z)^{{{m.group(1)}}}]$" if m else t
+
+
 def r2(y, p):
     ss_res = float(np.sum((y - p) ** 2))
     ss_tot = float(np.sum((y - y.mean()) ** 2))
@@ -264,7 +272,7 @@ def main() -> int:
     })
     fig, (a1, a2, a3) = plt.subplots(1, 3, figsize=(15.0, 5.0),
                                      gridspec_kw={"wspace": 0.30})
-    tl = TARGET_LABEL.get(args.target, args.target)
+    tl = target_label(args.target)
     for ax in (a1, a2, a3):
         ax.set_box_aspect(1)          # square panels, aligned titles; a keeps 1:1 limits
 
@@ -440,7 +448,7 @@ def covariate_figure(args, model, y, p, sids, out, cmp_df=None):
         ax.axis("off")
     if len(covs):
         axes[0].legend(frameon=False, loc="upper right", fontsize=7.5)
-    tl = TARGET_LABEL.get(args.target, args.target)
+    tl = target_label(args.target)
     fig.suptitle(f"{tl} residuals vs other quantities  ·  {model}  ·  window {args.window}",
                  y=1.0, fontsize=11, color=INK)
     fig.text(0.5, -0.02,
