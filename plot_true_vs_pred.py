@@ -57,7 +57,7 @@ DENSITY = LinearSegmentedColormap.from_list("density", ["#F1F3F3", "#C9D0CF", "#
 HEX_MIN_N = 3000        # below this, a scatter is still readable
 
 TARGET_LABEL = {"m": r"$\log M_{\rm BH}$", "z": r"$z$", "e": r"$\log\,L/L_{\rm Edd}$",
-                "mz": r"$\log[M_{\rm BH}/(1+z)^2]$"}
+                "mz": r"$\log[M_{\rm BH}/(1+z)^2]$", "mz3": r"$\log[M_{\rm BH}/(1+z)^3]$"}
 
 
 def r2(y, p):
