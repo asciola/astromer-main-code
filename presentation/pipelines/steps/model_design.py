@@ -20,6 +20,11 @@ def build_model(params, return_weights=False):
     if not 'no_msk_token' in params.keys():
         params['no_msk_token'] = False
 
+    # Configs written before the [MSK] token fix lack this key, and those models
+    # were trained without the token (see get_ASTROMER in src/models/astromer_1.py).
+    if not 'apply_msk_token' in params.keys():
+        params['apply_msk_token'] = False
+
     if not 'latent_dim' in params.keys():
         params['latent_dim'] = None
 
@@ -62,7 +67,8 @@ def build_model(params, return_weights=False):
                          temperature=params['temperature'],
                          use_cache=params['use_kv_cache'],
                          latent_dim=params['latent_dim'],
-                         linear_attention=params['linear_attention']
+                         linear_attention=params['linear_attention'],
+                         apply_msk_token=params['apply_msk_token']
                          )
 
     return model

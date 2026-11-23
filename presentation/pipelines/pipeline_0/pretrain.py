@@ -161,7 +161,12 @@ if __name__ == '__main__':
     parser.add_argument('--norm', default='zero-mean', type=str,
                         help='normalization: zero-mean - random-mean')
     parser.add_argument('--sampling', action='store_true', help='sampling windows')
-    parser.add_argument('--no-msk-token', action='store_true', help='Do not add trainable MSK token in the input')
+    parser.add_argument('--no-msk-token', action='store_true',
+                        help='Replace masked steps with a fixed 0 instead of a learned [MSK] token')
+    parser.add_argument('--legacy-mask', dest='apply_msk_token', action='store_false',
+                        help='Reproduce models trained before the [MSK] token fix: masked steps '
+                             'keep their true values in the input, so the encoder can read '
+                             'them. Only for comparisons with those models.')
 
     # ==== TRAINING ===================================================
     parser.add_argument('--lr', default=1e-5, type=float,

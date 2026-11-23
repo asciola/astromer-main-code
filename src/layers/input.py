@@ -41,24 +41,27 @@ class AddMSKToken(Layer):
         self.window_size = window_size
 
     def build(self, input_shape):
-        self.msk_token = tf.Variable(
-                        initial_value=tf.constant([[0.]]),
-                        dtype=tf.float32,
-                        trainable=self.trainable,)
+        # add_weight rather than a bare tf.Variable, so the token is tracked as a
+        # layer weight (trained and saved) under both Keras 2 and Keras 3.
+        self.msk_token = self.add_weight(name='msk_token',
+                                         shape=(1, 1),
+                                         initializer='zeros',
+                                         dtype='float32',
+                                         trainable=self.trainable)
 
     def call(self, inputs):
-        # Get the dtype from inputs
+        # Return a NEW dict. This layer used to write into `inputs` in place, which
+        # also rewrote the caller's dict of Input tensors: the functional model then
+        # took this layer's outputs as its inputs and silently left the layer out,
+        # so masked steps reached the encoder with their true values.
+        outputs = dict(inputs)
         compute_dtype = inputs['mask_in'].dtype
-
-        # Cast msk_token to match input dtype (float16 in mixed precision)
-        msk_token_cast = tf.cast(self.msk_token, compute_dtype)
-        msk_token = tf.tile(msk_token_cast, [self.window_size, 1])
+        # Cast to the input dtype (bfloat16 under mixed precision)
+        msk_token = tf.cast(self.msk_token, compute_dtype)
+        one = tf.cast(1., compute_dtype)
         for key in self.on:
-            one = tf.cast(1., compute_dtype)
-            partial = tf.multiply(inputs[key], one - inputs['mask_in'])
-            partial_mask = tf.multiply(inputs['mask_in'], msk_token)
-            partial = tf.add(partial, partial_mask)
-            inputs[key] = partial 
-        return inputs
+            kept = tf.multiply(inputs[key], one - inputs['mask_in'])
+            outputs[key] = tf.add(kept, tf.multiply(inputs['mask_in'], msk_token))
+        return outputs
 
 

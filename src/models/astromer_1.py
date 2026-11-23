@@ -43,18 +43,30 @@ def get_ASTROMER(num_layers=2,
                  temperature=0.,
                  use_cache=False,
                  latent_dim=None,
-                 linear_attention=False):
-    
+                 linear_attention=False,
+                 apply_msk_token=False):
+    """apply_msk_token=True replaces masked input steps with the [MSK] token
+    (learned if trainable_mask, else fixed at 0) before the encoder.
+
+    False rebuilds the models trained before that was fixed: AddMSKToken was always
+    left out of the graph (see src/layers/input.py), so masked steps kept their true
+    values and trainable_mask had no effect. Their checkpoints hold no token weight,
+    so they must be rebuilt this way to load and to give the same outputs.
+    """
     print('[INFO] Temperature: {:.2f}'.format(temperature))
     print('[INFO] Mask format: {}'.format(mask_format))
+    print('[INFO] [MSK] token: {}'.format(
+        ('learned' if trainable_mask else 'fixed 0') if apply_msk_token
+        else 'none (legacy: masked steps keep their values)'))
 
     placeholder = build_input(window_size, batch_size)
+    encoder_inputs = placeholder
 
-    if trainable_mask:
-        placeholder = AddMSKToken(trainable=True, 
-                                  window_size=window_size, 
-                                  on=['input'], 
-                                  name='msk_token')(placeholder)
+    if apply_msk_token:
+        encoder_inputs = AddMSKToken(trainable=trainable_mask,
+                                     window_size=window_size,
+                                     on=['input'],
+                                     name='msk_token')(placeholder)
 
     encoder = Encoder(window_size=window_size,
                       num_layers=num_layers,
@@ -74,7 +86,7 @@ def get_ASTROMER(num_layers=2,
                       linear_attention=linear_attention,
                       name='encoder')
 
-    x = encoder(placeholder)
+    x = encoder(encoder_inputs)
     x = RegLayer(name='regression')(x)
 
     return CustomModel(correct_loss=correct_loss, 
