@@ -95,7 +95,7 @@ def train_classifier(model,
         if valid_bce.result() < best_loss:
             best_loss = valid_bce.result()
             es_count = 0.
-            model.save_weights(os.path.join(exp_path, 'weights'))
+            model.save_weights(os.path.join(exp_path, 'out.weights.h5'))
         else:
             es_count+=1.
         if es_count == patience:
@@ -127,7 +127,7 @@ def get_conf(path):
         return conf
 
 def load_weights(model, weigths):
-    weights_path = '{}/weights'.format(weigths)
+    weights_path = os.path.join(weigths, 'out.weights.h5')
     model.load_weights(weights_path)
     return model
 

@@ -69,6 +69,8 @@ from presentation.pipelines.steps.model_design import load_pt_model
 from src.data.loaders import get_loader
 from src.models.astromer_0 import build_input as build_input_zero
 from src.models.astromer_1 import build_input as build_input_base
+from src.layers.pooling import MaskedMean
+from src.layers.encoders import EncoderByLayer
 
 
 def build_extractor(astromer, cfg, pool='last'):
@@ -82,21 +84,22 @@ def build_extractor(astromer, cfg, pool='last'):
     encoder = astromer.get_layer('encoder')
     encoder.trainable = False
 
-    z_by_layer = encoder(inp, z_by_layer=True)
-    if not isinstance(z_by_layer, (list, tuple)):
-        z_by_layer = [z_by_layer]
+    # EncoderByLayer rather than encoder(inp, z_by_layer=True), which Keras 3
+    # cannot connect (see its docstring). Same weights, same outputs.
+    z_by_layer = EncoderByLayer(encoder, name='encoder_by_layer')(inp)
 
     mask = 1. - inp['mask_in']                      # 1 where the point is real
-    denom = tf.reduce_sum(mask, axis=1)             # (batch, 1)
 
-    def pooled(z):
-        return tf.math.divide_no_nan(
-            tf.reduce_sum(tf.multiply(z, mask), axis=1), denom)
+    # Masked mean over time. A layer rather than bare tf ops, which Keras 3
+    # refuses on the symbolic tensors of a functional model.
+    def pooled(z, i):
+        return MaskedMean(axis=1, name=f'masked_mean_{i}')([z, mask])
 
     if pool == 'last':
-        out = pooled(z_by_layer[-1])
+        out = pooled(z_by_layer[-1], len(z_by_layer) - 1)
     elif pool == 'concat':
-        out = tf.concat([pooled(z) for z in z_by_layer], axis=-1)
+        out = tf.keras.layers.Concatenate(axis=-1, name='concat_layers')(
+            [pooled(z, i) for i, z in enumerate(z_by_layer)])
     else:
         raise ValueError(f'unknown --pool {pool}')
 

@@ -13,11 +13,11 @@ There is no test suite, linter, or build step. Training and embedding extraction
 
 ## Environments (uv, not conda)
 
-Dependencies are managed by **uv**. There are two environments, and they cannot be merged: TensorFlow 2.14 needs numpy<2 and CUDA 11, while the GPU torch build needs CUDA 12.
+Dependencies are managed by **uv**. There are two environments. Both now use CUDA 12 and numpy 2, so they could probably be merged, but that has not been tried.
 
 | | project | venv | Python | for |
 |---|---|---|---|---|
-| **tf** (default) | `pyproject.toml` | `.venv` | 3.11 | pretraining, finetuning, embeddings, record conversion, plotting |
+| **tf** (default) | `pyproject.toml` | `.venv` | 3.12 | pretraining, finetuning, embeddings, record conversion, plotting |
 | **agn** | `envs/agn-torch/pyproject.toml` | `envs/agn-torch/.venv` | 3.11 | `fit_regressor.py --model mlp` on a GPU |
 
 ```bash
@@ -29,9 +29,12 @@ In scripts, `source activate_env.sh` (optionally `source activate_env.sh agn`) r
 
 uv's cache and its downloaded interpreters are kept on lab storage (`UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, set by `activate_env.sh`) because `/n/home07` sits at its quota. Both are large and freely regenerable; never put them back in `$HOME`.
 
-**Python 3.11 is a ceiling, not a preference.** TensorFlow 2.14 publishes no wheels past cp311. Going to 3.12 would require TF >= 2.16, which is where `tf.keras` became Keras 3 -- and Keras 3 cannot reliably reload the existing `out.weights.h5` checkpoints (202 of them under `presentation/results`), because they were saved from subclassed `Model`s with custom `train_step`/`test_step`. Treat any Python bump past 3.11 as a TF/Keras-3 migration with a checkpoint-conversion step, not as an environment change.
-
-Relatedly, the CUDA 11 libraries are listed explicitly in `pyproject.toml` instead of using the `tensorflow[and-cuda]` extra. That extra forces `tensorrt==8.5.3.1`, which ships a **cp310-only** wheel and was the real thing pinning this project to Python 3.10. Nothing here calls TF-TRT, so it is dropped; TF prints a harmless "Could not find TensorRT" line at import. The nvidia-*-cu11 pins are exactly what the extra resolved to, so the GPU stack is unchanged. They carry a `sys_platform == 'linux'` marker (NVIDIA ships no macOS wheels), so `uv sync` also works on an Apple Silicon laptop, giving a CPU-only TF there. That needs the explicit `tensorflow-macos` dependency: on macOS arm64 the `tensorflow` 2.14 wheel is an empty shim that requires it, and uv locks from the Linux wheel's metadata, which does not.
+**TensorFlow 2.21 / Keras 3.** The tf env is Python 3.12 with TF 2.21, where `tf.keras` is Keras 3 (TF 2.21 has wheels up to cp313). The GPU libraries come from the `tensorflow[and-cuda]` extra (CUDA 12, cuDNN 9; Linux only, so a Mac gets a CPU-only TF). The extra no longer pulls in `tensorrt`, which once pinned this project to Python 3.10. TF 2.21 also dropped its `tensorboard` dependency; it is listed explicitly for viewing logs (training writes them with `tf.summary`). Until branch `keras3-py312`, the env was Python 3.11 / TF 2.14 (Keras 2), and every checkpoint in `presentation/results` was written by it. Compatibility rules:
+- **Old checkpoints** keep their Keras 2 HDF5 group names (`_layer_checkpoint_dependencies/...` where Keras 3 expects `layers/...`). Keras 3 maps that name for top-level layers only, so plain `model.load_weights` fails on the attention blocks. Always load through `load_weights_compat()` in `presentation/pipelines/steps/model_design.py` (`load_pt_model` and resume already do). It converts into a temporary copy and never touches the file. `check_checkpoints.py dump` (once per env) and `compare` verify that a list of checkpoints gives the same outputs in both envs.
+- **Functional models.** Keras 3 refuses TF functions (`tf.reduce_sum`, `tf.stack`, ...) on the symbolic tensors of a functional model being built. Put those steps in a layer (`src/layers/pooling.py`: `MaskedMean`, `Stack`); arithmetic operators are fine. To use a pretrained encoder's per-layer outputs in a new functional model, use `EncoderByLayer(encoder)` (`src/layers/encoders.py`), not `encoder(x, z_by_layer=True)`. Keras 3 cannot connect a second call of a layer that returns a list after its first call returned one tensor.
+- **Variables.** Create layer variables with `add_weight`. Keras 3 does not track a bare `tf.Variable` attribute, so it would be neither trained nor saved.
+- **Weight files.** Keras 3 writes only `*.weights.h5`. The old TensorFlow-checkpoint `weights` files (finetune/classify before this change) cannot be loaded by Keras 3.
+- **Optimizer state.** `latest/optimizer_state.pkl` stores Adam's moments per trainable variable (`optimizer_state()` / `restore_optimizer_state()` in `src/training/utils.py`), because `optimizer.variables` differs between Keras 2 and 3. Resume still reads the old TF 2.14 format. If the state does not fit the model, it warns and continues with fresh moments rather than restoring wrong values.
 
 Add a dependency with `uv add <pkg>` (the tf env) or `uv add --project envs/agn-torch <pkg>`, then commit the changed `uv.lock`. `mlflow` and Jupyter are optional extras (`uv sync --extra notebook`), not part of the default install.
 
@@ -53,7 +56,7 @@ python -m presentation.pipelines.pipeline_0.finetune --pt-model <.../pretraining
 python -m presentation.pipelines.pipeline_0.pretrain --data <records_dir> --debug
 ```
 
-Many bash files under `presentation/pipelines/*/bash/` and `presentation/tutorials/*.md` are stale. They call `presentation.scripts.pretrain` and `presentation.scripts.test_model`, which no longer exist. The current entry points are the ones listed above. Paths in the README that start with `context/presentation/...` actually mean `presentation/...`.
+`finetune.py` does not currently run: it imports `presentation.scripts.disttrain`, which lives at `presentation/scripts/distributed/disttrain.py` (true since the v2 import). Many bash files under `presentation/pipelines/*/bash/` and `presentation/tutorials/*.md` are stale. They call `presentation.scripts.pretrain` and `presentation.scripts.test_model`, which no longer exist. The current entry points are the ones listed above. Paths in the README that start with `context/presentation/...` actually mean `presentation/...`.
 
 Datasets for the original paper (alcock, atlas, macho, ogle): `cd data && bash get_data.sh <name>[-record]`.
 

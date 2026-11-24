@@ -120,7 +120,12 @@ def ft_step(opt):
             if tf.math.greater(min_loss, vl_rmse):
                 min_loss = vl_rmse
                 es_count = 0
-                astromer.save_weights(os.path.join(EXPDIR, 'weights'))
+                # out.weights.h5, the name load_pt_model reads (classify.py loads the
+                # finetuned model with it); Keras 3 only writes .weights.h5 files.
+                # Temp file + rename so a preempted job never leaves a truncated file.
+                astromer.save_weights(os.path.join(EXPDIR, 'out.tmp.weights.h5'))
+                os.replace(os.path.join(EXPDIR, 'out.tmp.weights.h5'),
+                           os.path.join(EXPDIR, 'out.weights.h5'))
             else:
                 es_count = es_count + 1
 

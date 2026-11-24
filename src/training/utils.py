@@ -17,7 +17,7 @@ from tensorflow.keras.optimizers import Adam
 from datetime import datetime
 
 from src.training.scheduler import CustomSchedule
-from presentation.pipelines.steps.model_design import build_model, load_pt_model
+from presentation.pipelines.steps.model_design import build_model, load_pt_model, load_weights_compat
 from presentation.pipelines.steps.load_data import build_loader
 from presentation.pipelines.steps.metrics import evaluate_ft
 
@@ -33,6 +33,53 @@ def replace_config(source, target):
 def tensorboard_log(name, value, writer, step=0):
 	with writer.as_default():
 		tf.summary.scalar(name, value, step=step)
+
+def optimizer_state(optimizer):
+    """Adam's state in a form that does not depend on the Keras version.
+
+    Both the TF 2.11+ Keras 2 Adam and the Keras 3 Adam keep one first- and one
+    second-moment slot per trainable variable, in trainable-variable order, in
+    _momentums and _velocities. optimizer.variables is NOT portable: its order
+    and length differ between the two (Keras 3 adds a learning-rate variable and
+    lists all momentums before all velocities).
+
+    No 'weights' key is written, so code from before this format fails loudly on
+    these files instead of assigning values to the wrong variables.
+    """
+    return {'opt_format': 2,
+            'iterations': int(optimizer.iterations.numpy()),
+            'm': [v.numpy() for v in optimizer._momentums],
+            'v': [v.numpy() for v in optimizer._velocities]}
+
+
+def restore_optimizer_state(optimizer, model, opt_state):
+    """Inverse of optimizer_state(); also reads the older format, the list of
+    optimizer.variables saved by TF 2.14: [iteration, m0, v0, m1, v1, ...].
+    If the saved state does not fit this model, warns and leaves the optimizer
+    fresh (resumed weights, reset moments) rather than restoring it wrongly."""
+    # Materialize optimizer slot variables without applying a gradient step
+    optimizer.build(model.trainable_variables)
+    mom, vel = list(optimizer._momentums), list(optimizer._velocities)
+    if 'm' in opt_state:
+        it, ms, vs = opt_state['iterations'], opt_state['m'], opt_state['v']
+    else:
+        w = opt_state['weights']
+        if len(w) != 1 + 2 * len(mom):
+            print('[WARN] optimizer_state.pkl has {} variables, expected {} for this '
+                  'model; optimizer state NOT restored'.format(len(w), 1 + 2 * len(mom)))
+            return False
+        it, ms, vs = w[0], w[1::2], w[2::2]
+    shapes_ok = (len(ms) == len(mom) and len(vs) == len(vel) and
+                 all(tuple(a.shape) == tuple(b.shape) for a, b in zip(ms + vs, mom + vel)))
+    if not shapes_ok:
+        print('[WARN] optimizer_state.pkl does not match this model\'s variables; '
+              'optimizer state NOT restored')
+        return False
+    for var, val in zip(mom + vel, list(ms) + list(vs)):
+        var.assign(val)
+    optimizer.iterations.assign(int(it))
+    return True
+
 
 @tf.function()
 def train_step(model, inputs, optimizer):
@@ -149,7 +196,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             opt_path = latest_opt_path
             # Load latest weights (overriding what load_pt_model loaded)
             if os.path.exists(latest_weights_path):
-                model.load_weights(latest_weights_path)
+                load_weights_compat(model, latest_weights_path)
                 print(f'[INFO] Loaded latest weights from {latest_weights_path}')
         elif os.path.exists(root_opt_path):
             opt_path = root_opt_path
@@ -157,14 +204,9 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             opt_path = None
             
         if opt_path is not None:
-            # Materialize optimizer slot variables without applying a gradient step
-            optimizer.build(model.trainable_variables)
-            
             with open(opt_path, 'rb') as f:
                 opt_state = pickle.load(f)
-            # Restore optimizer variables (TF 2.11+ API)
-            for var, val in zip(optimizer.variables, opt_state['weights']):
-                var.assign(val)
+            opt_restored = restore_optimizer_state(optimizer, model, opt_state)
             start_epoch = opt_state['epoch'] + 1
             step = opt_state['step']
             min_loss = opt_state['min_loss']
@@ -174,7 +216,8 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
             best_tr_rsquare = opt_state.get('best_tr_rsquare', 0.)
             best_vl_rmse = opt_state.get('best_vl_rmse', 0.)
             best_vl_rsquare = opt_state.get('best_vl_rsquare', 0.)
-            print(f'[INFO] Restored optimizer state from epoch {opt_state["epoch"]} (es_count={es_count}, min_loss={min_loss:.4f})')
+            print(f'[INFO] Resuming after epoch {opt_state["epoch"]} (es_count={es_count}, min_loss={min_loss:.4f}); '
+                  f'optimizer state {"restored" if opt_restored else "NOT restored (fresh moments)"}')
 
     pbar = tqdm(range(start_epoch, num_epochs), total=num_epochs, initial=start_epoch)
     pbar.set_description("Epoch 0 (p={}) - rmse: -/- rsquare: -/-", refresh=True)
@@ -279,7 +322,7 @@ def train(model, optimizer, train_data, validation_data, num_epochs=1000, es_pat
         model.save_weights(os.path.join(latest_dir, 'out.tmp.weights.h5'))
         os.replace(os.path.join(latest_dir, 'out.tmp.weights.h5'), os.path.join(latest_dir, 'out.weights.h5'))
         opt_state = {
-            'weights': [v.numpy() for v in optimizer.variables],
+            **optimizer_state(optimizer),
             'epoch': int(epoch),
             'step': int(step),
             'min_loss': float(min_loss),

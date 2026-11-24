@@ -8,52 +8,33 @@
 #   uv sync                 # create/update .venv
 #   uv run python -m presentation.pipelines.pipeline_0.pretrain --help
 #
-# The GPU regression env lives in envs/agn-torch/ (different Python, CUDA 12,
-# numpy 2.x -- it cannot share this environment).
+# The GPU regression env lives in envs/agn-torch/ (GPU torch build). Both now
+# use CUDA 12 and numpy 2, so they could probably be merged; not yet tried.
 
 [project]
 name = "astromer-mhla"
 version = "0.1.0"
 description = "Astromer 2 with Multi-Head Latent Attention, plus an AGN/quasar regression study"
 readme = "README.md"
-# 3.11 is the ceiling: TensorFlow 2.14 publishes no wheels past cp311.
-# Going higher means TF >= 2.16, which is where tf.keras became Keras 3 --
-# that cannot reliably reload the 202 existing .weights.h5 checkpoints, which
-# were saved from subclassed Models with custom train_step/test_step.
-requires-python = "==3.11.*"
+# TensorFlow 2.21 publishes wheels for cp310-cp313. tf.keras is Keras 3 there.
+# Checkpoints written by TF 2.14 / Keras 2 still load: load_weights_compat()
+# in presentation/pipelines/steps/model_design.py renames their HDF5 paths.
+requires-python = "==3.12.*"
 
 dependencies = [
     # --- core model stack -----------------------------------------------
-    "tensorflow==2.14.0",
-    # On Apple Silicon the tensorflow 2.14 wheel is an empty shim whose only
-    # job is to require tensorflow-macos, where the real code lives. uv takes
-    # one wheel's metadata (Linux's) for the whole version, so it never sees
-    # that requirement and installs a tensorflow with no tensorflow module.
-    "tensorflow-macos==2.14.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    # These are the CUDA 11 libraries that give TF its GPU, listed explicitly
-    # rather than via the tensorflow[and-cuda] extra. That extra also forces
-    # tensorrt==8.5.3.1, which publishes a cp310 wheel ONLY -- it is what
-    # pinned this project to Python 3.10. TensorRT is used solely by TF-TRT
-    # (tf.experimental.tensorrt), which nothing in this repo calls, so
-    # dropping it costs nothing but a "Could not find TensorRT" warning at
-    # import. Versions are exactly what tensorflow[and-cuda]==2.14.0 resolves
-    # to, so the GPU stack is unchanged. Linux only: NVIDIA publishes no macOS
-    # wheels, and TF has no CUDA there anyway, so a Mac gets a CPU-only TF.
-    "nvidia-cublas-cu11==11.11.3.6; sys_platform == 'linux'",
-    "nvidia-cuda-cupti-cu11==11.8.87; sys_platform == 'linux'",
-    "nvidia-cuda-nvcc-cu11==11.8.89; sys_platform == 'linux'",
-    "nvidia-cuda-runtime-cu11==11.8.89; sys_platform == 'linux'",
-    "nvidia-cudnn-cu11==8.7.0.84; sys_platform == 'linux'",
-    "nvidia-cufft-cu11==10.9.0.58; sys_platform == 'linux'",
-    "nvidia-curand-cu11==10.3.0.86; sys_platform == 'linux'",
-    "nvidia-cusolver-cu11==11.4.1.48; sys_platform == 'linux'",
-    "nvidia-cusparse-cu11==11.7.5.86; sys_platform == 'linux'",
-    "nvidia-nccl-cu11==2.16.5; sys_platform == 'linux'",
-    # TF 2.14 cannot run on numpy 2.x.
-    "numpy==1.26.4",
+    "tensorflow==2.21.0",
+    # The and-cuda extra brings TF's CUDA 12 / cuDNN 9 libraries as pip wheels
+    # (it no longer pulls in tensorrt, which once pinned this project to cp310).
+    # Linux only: NVIDIA publishes no macOS wheels, and TF has no CUDA there, so
+    # a Mac gets a CPU-only TF from the plain wheel.
+    "tensorflow[and-cuda]==2.21.0; sys_platform == 'linux'",
+    "numpy==2.4.6",
+    # TF 2.21 no longer depends on tensorboard. Training writes its logs with
+    # tf.summary (TF itself); this is only for viewing them.
+    "tensorboard==2.21.0",
     # CPU build only: this is imported before TF to read WebDataset .tar.gz
-    # shards (src/data/loaders.py), never to compute. The GPU torch build
-    # ships CUDA 12 libs that clash with TF's CUDA 11 ones.
+    # shards (src/data/loaders.py), never to compute.
     "torch==2.11.0",
 
     # --- data / analysis ------------------------------------------------
@@ -63,7 +44,7 @@ dependencies = [
     "joblib==1.5.2",
     "polars==0.20.10",
     "pyarrow==22.0.0",
-    "h5py==3.15.1",
+    "h5py==3.14.0",  # TF 2.21 requires h5py < 3.15
     "toml==0.10.2",
     "pyyaml==6.0.2",
     "tqdm==4.67.1",

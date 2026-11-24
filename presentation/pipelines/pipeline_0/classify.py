@@ -62,7 +62,7 @@ def clf_step(opt, mlp_arch='avg_mlp'):
     
     cbks = [TensorBoard(log_dir=os.path.join(CLFDIR, 'tensorboard')),
             EarlyStopping(monitor='val_loss', patience=40),
-            ModelCheckpoint(filepath=os.path.join(CLFDIR, 'weights'),
+            ModelCheckpoint(filepath=os.path.join(CLFDIR, 'out.weights.h5'),
                             save_weights_only=True,
                             save_best_only=True,
                             save_freq='epoch',

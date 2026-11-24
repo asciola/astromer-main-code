@@ -1,6 +1,10 @@
 import tensorflow as tf 
 import toml 
 import os
+import tempfile
+
+import h5py
+import keras
 
 from src.models.astromer_0 import build_input as build_input_zero
 from src.models.astromer_0 import get_ASTROMER as get_Zero
@@ -9,6 +13,8 @@ from src.models.astromer_1 import get_ASTROMER as get_Base
 
 from tensorflow.keras import layers
 from src.layers.input import GammaWeight
+from src.layers.pooling import MaskedMean, Stack
+from src.layers.encoders import EncoderByLayer
 
 def build_model(params, return_weights=False):
     if not 'mask_format' in params.keys():
@@ -82,22 +88,65 @@ def load_pt_model(pt_path, optimizer=None):
     weights_path = os.path.join(pt_path, 'out.weights.h5')
     if optimizer is not None:
         model.compile(optimizer=optimizer)
-    model.load_weights(weights_path)
+    load_weights_compat(model, weights_path)
     return model, pt_config
 
 
+KERAS2_GROUP = '_layer_checkpoint_dependencies'
+
+
+def _keras2_paths(path):
+    """True if a .weights.h5 file names its groups the Keras 2 way."""
+    found = []
+    with h5py.File(path, 'r') as f:
+        f.visit(lambda name: found.append(True) if KERAS2_GROUP in name.split('/') else None)
+    return bool(found)
+
+
+def convert_keras2_weights(src, dst):
+    """Copy a .weights.h5 written by TF 2.14 (Keras 2), renaming every
+    '_layer_checkpoint_dependencies' group to 'layers', the name Keras 3 uses.
+    That is the only difference Keras 3 does not handle itself for these models:
+    it translates the name for top-level layers but not for nested ones."""
+    def rename(name):
+        return '/'.join('layers' if p == KERAS2_GROUP else p for p in name.split('/'))
+
+    with h5py.File(src, 'r') as a, h5py.File(dst, 'w') as b:
+        for k, v in a.attrs.items():
+            b.attrs[k] = v
+
+        def copy(name, obj):
+            if isinstance(obj, h5py.Group):
+                g = b.require_group(rename(name))
+            else:
+                g = b.create_dataset(rename(name), data=obj[()])
+            for k, v in obj.attrs.items():
+                g.attrs[k] = v
+        a.visititems(copy)
+
+
+def load_weights_compat(model, path):
+    """model.load_weights(path), also for Keras 2 checkpoints under Keras 3.
+
+    The file on disk is never modified: an old checkpoint is converted into a
+    temporary copy, which is loaded and deleted."""
+    if int(keras.__version__.split('.')[0]) < 3 or not _keras2_paths(path):
+        model.load_weights(path)
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        converted = os.path.join(tmp, 'converted.weights.h5')
+        convert_keras2_weights(path, converted)
+        model.load_weights(converted)
+
+
 def get_avg_clf(inputs, mask, num_cls):
-    x = tf.multiply(inputs, mask) 
-    x = tf.reduce_sum(x, 1)
-    x = tf.math.divide_no_nan(x, tf.reduce_sum(mask, 1))
+    x = MaskedMean(axis=1)([inputs, mask])
     x = layers.LayerNormalization(name='layer_norm')(x)
     y_pred = layers.Dense(num_cls, name='output_layer')(x)
     return y_pred
     
 def get_avg_mlp(inputs, mask, num_cls):
-    x = tf.multiply(inputs, mask) 
-    x = tf.reduce_sum(x, 1)
-    x = tf.math.divide_no_nan(x, tf.reduce_sum(mask, 1))
+    x = MaskedMean(axis=1)([inputs, mask])
 
     x = layers.Dense(1024, activation='relu')(x)
     x = layers.Dense(512, activation='relu')(x)
@@ -107,9 +156,7 @@ def get_avg_mlp(inputs, mask, num_cls):
     return y_pred
 
 def get_avg_mlp_dp(inputs, mask, num_cls):
-    x = tf.multiply(inputs, mask) 
-    x = tf.reduce_sum(x, 1)
-    x = tf.math.divide_no_nan(x, tf.reduce_sum(mask, 1))
+    x = MaskedMean(axis=1)([inputs, mask])
 
     x = layers.Dense(1024, activation='relu')(x)
     x = layers.Dropout(0.2)(x)
@@ -126,23 +173,18 @@ def get_mlp_avg(inputs, mask, num_cls):
     x = layers.TimeDistributed(layers.Dense(256, activation='relu'))(x)
     x = layers.LayerNormalization(name='layer_norm')(x)
     y_pred = layers.TimeDistributed(layers.Dense(num_cls, name='output_layer'))(x)
-    y_pred = tf.reduce_sum(y_pred*mask,1)
-    y_pred = tf.math.divide_no_nan(y_pred, tf.reduce_sum(mask, 1))
+    y_pred = MaskedMean(axis=1)([y_pred, mask])
     return y_pred
 
 def get_linear(inputs, mask, num_cls):
     y_pred = layers.TimeDistributed(layers.Dense(num_cls, name='output_layer'))(inputs)
-    y_pred = tf.reduce_sum(y_pred*mask,1)
-    y_pred = tf.math.divide_no_nan(y_pred, mask)
+    y_pred = MaskedMean(axis=1)([y_pred, mask])
     return y_pred
 
 def get_skip_avg_mlp(inputs, mask, num_cls):
 
-    x = tf.stack(inputs, axis=0)
-    mask = tf.expand_dims(mask, axis=0)
-    x = tf.multiply(x, mask) 
-    x = tf.reduce_sum(x, 2)
-    x = tf.math.divide_no_nan(x, tf.reduce_sum(mask, 2))
+    x = Stack(axis=0)(inputs)                 # (layers, batch, steps, dim)
+    x = MaskedMean(axis=2)([x, mask])         # (layers, batch, dim)
 
     x = GammaWeight(name='gamma_weight')(x)
     x = layers.Dense(1024, activation='relu')(x)
@@ -155,20 +197,21 @@ def get_skip_avg_mlp(inputs, mask, num_cls):
 
 def build_classifier(astromer, params, astromer_trainable, num_cls=None, arch='avg_mlp', verbose=1):
     # Build classifier
+    # EncoderByLayer, not encoder(..., z_by_layer=True): see its docstring.
     if params['arch'] == 'zero':
         inp_placeholder = build_input_zero(params['window_size'])
         encoder = astromer.get_layer('encoder')
         encoder.trainable = astromer_trainable
-        embedding = encoder(inp_placeholder, z_by_layer=True)
+        embedding = EncoderByLayer(encoder, name='encoder_by_layer')(inp_placeholder)
 
     if params['arch'] == 'base' or params['arch'] == 'normal':
         inp_placeholder = build_input_base(params['window_size'])
         encoder = astromer.get_layer('encoder')
         encoder.trainable = astromer_trainable
-        input_embedding, _ = encoder.input_format(inp_placeholder)
-        embedding = encoder(inp_placeholder, z_by_layer=True)
-        if arch == 'skip_avg_mlp':
-            embedding.insert(0, input_embedding)
+        # skip_avg_mlp also averages the input embedding, prepended as element 0
+        embedding = EncoderByLayer(encoder,
+                                   with_input_embedding=(arch == 'skip_avg_mlp'),
+                                   name='encoder_by_layer')(inp_placeholder)
         
         
     mask = 1.- inp_placeholder['mask_in']

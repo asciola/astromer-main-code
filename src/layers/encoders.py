@@ -146,3 +146,31 @@ class SkipEncoder(Encoder):
             att_outputs = att_outputs.write(i, x)
         out = tf.reduce_mean(att_outputs.stack(), axis=0)
         return out  # (batch_size, input_seq_len, d_model)
+
+
+class EncoderByLayer(tf.keras.layers.Layer):
+    """The per-layer outputs of an existing (already built) Encoder, as a layer.
+
+    Used to put a pretrained encoder inside a new functional model (classifier
+    heads, the embedding extractor). Calling the encoder itself there with
+    z_by_layer=True fails under Keras 3: its first call, inside the pretrained
+    model, returned a single tensor, and Keras 3 cannot connect a later call of
+    the same layer that returns a list ("Output with path `1` is not connected
+    to `inputs`"). This wrapper's own first call is the list-returning one; the
+    encoder inside it runs on plain tensors, and its weights are shared.
+
+    with_input_embedding=True prepends the encoder's input embedding (input
+    projection + positional encoding), as the skip_avg_mlp head needs.
+    """
+    def __init__(self, encoder, with_input_embedding=False, **kwargs):
+        super().__init__(**kwargs)
+        self.encoder = encoder
+        self.with_input_embedding = with_input_embedding
+
+    def call(self, inputs, training=None):
+        zs = self.encoder(inputs, training=training, z_by_layer=True)
+        zs = list(zs) if isinstance(zs, (list, tuple)) else [zs]
+        if self.with_input_embedding:
+            x, _ = self.encoder.input_format(inputs)
+            zs = [x] + zs
+        return zs

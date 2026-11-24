@@ -11,13 +11,16 @@ class GammaWeight(Layer):
         self.softmax_act = Softmax(name='softmax')
         
     def build(self, input_shape):
-        initial_value = tf.ones([input_shape[0]]) * 1/input_shape[0]
-        self.gamma = tf.Variable(initial_value=initial_value,
-                                 trainable=True,
-                                 dtype=tf.float32,
-                                 name='gamma')
+        # add_weight rather than a bare tf.Variable, which Keras 3 does not track
+        # (it would be neither trained nor saved).
+        n = int(input_shape[0])
+        self.gamma = self.add_weight(name='gamma',
+                                     shape=(n,),
+                                     initializer=tf.keras.initializers.Constant(1. / n),
+                                     dtype='float32',
+                                     trainable=True)
         
-    def call(self, inputs, training):
+    def call(self, inputs, training=None):
         # Cast gamma to match input dtype
         gamma = tf.cast(self.gamma, inputs.dtype)
         gamma = self.softmax_act(tf.expand_dims(gamma, 0))

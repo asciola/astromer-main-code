@@ -52,7 +52,9 @@ class AttentionBlock(tf.keras.layers.Layer):
 
     def call(self, x, training=None, mask=None, kv_cache=None, return_weights=False):
         if training is None:
-            training = tf.keras.backend.learning_phase()
+            # Keras fills `training` in from the outer call when there is one; a
+            # bare call is inference. (learning_phase() no longer exists in Keras 3.)
+            training = False
 
         if not self.use_cache:
             # Simple path for when caching is disabled (ignores kv_cache)
